@@ -380,7 +380,10 @@
                 if (typeof this.formatCost === 'function') {
                     return this.formatCost(amount);
                 }
-                return '$' + amount.toFixed(4);
+                if (amount > 0 && amount < 0.0001) {
+                    return '<$0.0001';
+                }
+                return '$' + amount.toFixed(4).replace(/(\.\d{2}\d*?)0+$/, '$1');
             },
 
             budgetOverrideDialogMessage() {
