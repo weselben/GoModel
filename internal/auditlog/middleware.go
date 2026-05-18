@@ -80,6 +80,9 @@ func Middleware(logger LoggerInterface) echo.MiddlewareFunc {
 			if authHeader := req.Header.Get("Authorization"); authHeader != "" {
 				entry.Data.APIKeyHash = hashAPIKey(authHeader)
 			}
+			if cfg.LogHeaders {
+				PopulateRequestHeaders(entry, req.Header)
+			}
 
 			// Store entry in context for potential enrichment by handlers
 			c.Set(string(LogEntryKey), entry)
@@ -397,10 +400,34 @@ func EnrichEntry(c *echo.Context, model, provider string) {
 	publishLiveAuditUpdate(c, entry)
 }
 
+// EnrichEntryWithRequestedModel attaches early requested-model metadata to the
+// live audit entry before the final workflow policy has been resolved.
+func EnrichEntryWithRequestedModel(c *echo.Context, requestedModel string) {
+	entryVal := c.Get(string(LogEntryKey))
+	if entryVal == nil {
+		return
+	}
+
+	entry, ok := entryVal.(*LogEntry)
+	if !ok || entry == nil {
+		return
+	}
+
+	requestedModel = strings.TrimSpace(requestedModel)
+	if requestedModel == "" {
+		return
+	}
+
+	entry.RequestedModel = requestedModel
+	publishLiveAuditUpdate(c, entry)
+}
+
 // EnrichEntryWithWorkflow attaches workflow metadata to the live
-// audit entry. This is preferred over resolution-only enrichment once workflow
+// audit entry. This is preferred over requested-model-only enrichment once workflow
 // resolution has completed for the request.
 func EnrichEntryWithWorkflow(c *echo.Context, workflow *core.Workflow) {
+	syncRequestWorkflow(c, workflow)
+
 	entryVal := c.Get(string(LogEntryKey))
 	if entryVal == nil {
 		return
@@ -412,7 +439,23 @@ func EnrichEntryWithWorkflow(c *echo.Context, workflow *core.Workflow) {
 	}
 
 	enrichEntryWithWorkflow(entry, workflow)
+	populateLiveRequestDataAfterWorkflow(c, entry, workflow)
 	publishLiveAuditUpdate(c, entry)
+}
+
+func syncRequestWorkflow(c *echo.Context, workflow *core.Workflow) {
+	if c == nil || workflow == nil {
+		return
+	}
+	req := c.Request()
+	if req == nil {
+		return
+	}
+	ctx := req.Context()
+	if core.GetWorkflow(ctx) == workflow {
+		return
+	}
+	c.SetRequest(req.WithContext(core.WithWorkflow(ctx, workflow)))
 }
 
 // EnrichLogEntryWithWorkflow attaches workflow metadata directly to
@@ -597,6 +640,21 @@ func publishLiveAuditUpdate(c *echo.Context, entry *LogEntry) {
 		return
 	}
 	publisher.PublishLiveEvent(LiveEventAuditUpdated, entry)
+}
+
+func populateLiveRequestDataAfterWorkflow(c *echo.Context, entry *LogEntry, workflow *core.Workflow) {
+	if c == nil || entry == nil || workflow == nil || !workflow.AuditEnabled() {
+		return
+	}
+	logger, ok := c.Get(string(LogEntryLivePublisherKey)).(LoggerInterface)
+	if !ok || logger == nil {
+		return
+	}
+	cfg := logger.Config()
+	if !cfg.Enabled || !cfg.LogBodies {
+		return
+	}
+	PopulateRequestData(entry, c.Request(), cfg)
 }
 
 func auditEnabledForContext(ctx context.Context) bool {

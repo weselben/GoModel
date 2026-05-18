@@ -46,14 +46,14 @@ func storeRequestModelResolution(c *echo.Context, resolution *core.RequestModelR
 		cloned := *workflow
 		cloned.ProviderType = resolution.ProviderType
 		cloned.Resolution = resolution
-		auditlog.EnrichEntryWithWorkflow(c, &cloned)
 		ctx = core.WithWorkflow(ctx, &cloned)
+		c.SetRequest(c.Request().WithContext(ctx))
+		auditlog.EnrichEntryWithWorkflow(c, &cloned)
 	}
 	if env := core.GetWhiteBoxPrompt(ctx); env != nil {
 		env.RouteHints.Model = resolution.ResolvedSelector.Model
 		env.RouteHints.Provider = resolution.ResolvedSelector.Provider
 	}
-	c.SetRequest(c.Request().WithContext(ctx))
 }
 
 func ensureRequestModelResolution(c *echo.Context, provider core.RoutableProvider, resolver RequestModelResolver) (*core.RequestModelResolution, bool, error) {
@@ -108,13 +108,13 @@ func enrichAuditEntryWithRequestedModel(c *echo.Context, requested core.Requeste
 	if requested.Model == "" {
 		return
 	}
-	workflow := &core.Workflow{}
 	if existing := core.GetWorkflow(c.Request().Context()); existing != nil {
 		cloned := *existing
-		workflow = &cloned
+		cloned.Resolution = &core.RequestModelResolution{
+			Requested: requested,
+		}
+		auditlog.EnrichEntryWithWorkflow(c, &cloned)
+		return
 	}
-	workflow.Resolution = &core.RequestModelResolution{
-		Requested: requested,
-	}
-	auditlog.EnrichEntryWithWorkflow(c, workflow)
+	auditlog.EnrichEntryWithRequestedModel(c, requested.RequestedQualifiedModel())
 }
