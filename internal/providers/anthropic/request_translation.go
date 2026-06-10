@@ -307,8 +307,8 @@ func convertToAnthropicRequest(req *core.ChatRequest) (*anthropicRequest, error)
 		anthropicReq.MaxTokens = resolveDefaultMaxTokens()
 	}
 
-	if req.Reasoning != nil && req.Reasoning.Effort != "" {
-		applyReasoning(anthropicReq, req.Model, req.Reasoning.Effort)
+	if effort := resolveAnthropicReasoningEffort(req); effort != "" {
+		applyReasoning(anthropicReq, req.Model, effort)
 	}
 
 	tools, err := convertOpenAIToolsToAnthropic(req.Tools)
@@ -561,6 +561,36 @@ func anthropicCacheControlFromExtra(extraFields core.UnknownJSONFields) (json.Ra
 		return nil, core.NewInvalidRequestError("anthropic cache_control must be an object", nil)
 	}
 	return core.CloneRawJSON(trimmed), nil
+}
+
+// resolveAnthropicReasoningEffort returns the requested reasoning effort,
+// accepting both the OpenAI Responses-style reasoning object and the Chat
+// Completions reasoning_effort string carried in extra fields. A non-empty
+// object effort wins when both are present; an empty object expresses no
+// effort intent, so the string form still applies. Values are trimmed and
+// lowercased so spellings like "High" map to the intended level.
+func resolveAnthropicReasoningEffort(req *core.ChatRequest) string {
+	if req.Reasoning != nil {
+		if effort := normalizeEffortInput(req.Reasoning.Effort); effort != "" {
+			return effort
+		}
+	}
+
+	raw := bytes.TrimSpace(req.ExtraFields.Lookup("reasoning_effort"))
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		return ""
+	}
+	var effort string
+	if err := json.Unmarshal(raw, &effort); err != nil {
+		return ""
+	}
+	return normalizeEffortInput(effort)
+}
+
+// normalizeEffortInput canonicalizes a user-supplied effort spelling so the
+// exact-match effort mapping does not downgrade values like " HIGH " to "low".
+func normalizeEffortInput(effort string) string {
+	return strings.ToLower(strings.TrimSpace(effort))
 }
 
 func resolveAnthropicTopP(req *core.ChatRequest) *float64 {
