@@ -78,8 +78,8 @@ func TestChatCompletion_MaxTokensMapping(t *testing.T) {
 
 	maxTokens := 4096
 	_, err := provider.ChatCompletion(context.Background(), &core.ChatRequest{
-		Model:    "qwen3-max",
-		Messages: []core.Message{{Role: "user", Content: "hi"}},
+		Model:     "qwen3-max",
+		Messages:  []core.Message{{Role: "user", Content: "hi"}},
 		MaxTokens: &maxTokens,
 	})
 	if err != nil {
@@ -162,8 +162,8 @@ func TestStreamChatCompletion_MaxTokensMapping(t *testing.T) {
 
 	maxTokens := 2048
 	_, err := provider.StreamChatCompletion(context.Background(), &core.ChatRequest{
-		Model:    "qwen3-flash",
-		Messages: []core.Message{{Role: "user", Content: "hi"}},
+		Model:     "qwen3-flash",
+		Messages:  []core.Message{{Role: "user", Content: "hi"}},
 		MaxTokens: &maxTokens,
 	})
 	if err != nil {
@@ -386,6 +386,28 @@ func TestPassthrough_Delegates(t *testing.T) {
 	}
 }
 
+func TestPassthrough_NilRequest(t *testing.T) {
+	provider := NewWithHTTPClient("key", nil, llmclient.Hooks{})
+
+	if _, err := provider.Passthrough(context.Background(), nil); err == nil {
+		t.Fatal("expected error for nil passthrough request")
+	}
+}
+
+func TestPassthrough_ReadError(t *testing.T) {
+	readErr := errors.New("read failed")
+	provider := NewWithHTTPClient("key", nil, llmclient.Hooks{})
+
+	_, err := provider.Passthrough(context.Background(), &core.PassthroughRequest{
+		Method:   http.MethodPost,
+		Endpoint: "/chat/completions",
+		Body:     errReadCloser{err: readErr},
+	})
+	if !errors.Is(err, readErr) {
+		t.Fatalf("Passthrough() error = %v, want %v", err, readErr)
+	}
+}
+
 func TestAdaptBailianRequest_Nil(t *testing.T) {
 	if r := adaptBailianRequest(nil); r != nil {
 		t.Fatal("expected nil")
@@ -398,7 +420,6 @@ func TestAdaptBailianRequest_NoMaxTokens(t *testing.T) {
 	if r.MaxTokens != nil {
 		t.Fatal("should not set max_completion_tokens when request had none")
 	}
-
 
 }
 func TestNew_UsesRegistrationAndDefaultBaseURL(t *testing.T) {
@@ -465,7 +486,6 @@ func TestAdaptBailianRequest_PreservesOtherFields(t *testing.T) {
 	}
 }
 
-
 func TestAdaptBailianRequest_RespectsExistingMaxCompletionTokens(t *testing.T) {
 	extra := core.UnknownJSONFieldsFromMap(map[string]json.RawMessage{
 		"max_completion_tokens": json.RawMessage(`200`),
@@ -519,7 +539,7 @@ func TestChatCompletion_UpstreamError(t *testing.T) {
 	provider.SetBaseURL(server.URL)
 
 	_, err := provider.ChatCompletion(context.Background(), &core.ChatRequest{
-		Model: "qwen3-max",
+		Model:    "qwen3-max",
 		Messages: []core.Message{{Role: "user", Content: "hi"}},
 	})
 	if err == nil {
@@ -537,7 +557,7 @@ func TestChatCompletion_TransportFailure(t *testing.T) {
 	}, llmclient.Hooks{})
 
 	_, err := provider.ChatCompletion(context.Background(), &core.ChatRequest{
-		Model: "qwen3-max",
+		Model:    "qwen3-max",
 		Messages: []core.Message{{Role: "user", Content: "hi"}},
 	})
 	if err == nil {
@@ -556,7 +576,7 @@ func TestStreamChatCompletion_UpstreamError(t *testing.T) {
 	provider.SetBaseURL(server.URL)
 
 	_, err := provider.StreamChatCompletion(context.Background(), &core.ChatRequest{
-		Model: "qwen3-max",
+		Model:    "qwen3-max",
 		Messages: []core.Message{{Role: "user", Content: "hi"}},
 	})
 	if err == nil {
@@ -830,6 +850,18 @@ type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 	return f(r)
+}
+
+type errReadCloser struct {
+	err error
+}
+
+func (r errReadCloser) Read([]byte) (int, error) {
+	return 0, r.err
+}
+
+func (r errReadCloser) Close() error {
+	return nil
 }
 
 func TestPassthrough_MaxTokensMapping(t *testing.T) {
