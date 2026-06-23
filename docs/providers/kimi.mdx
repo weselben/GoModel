@@ -1,6 +1,6 @@
 ---
 title: "Kimi"
-description: "Configure Kimi for Coding in GoModel. Synthetic model list, ZooCode header spoofing, and subscription-only access."
+description: "Configure Kimi for Coding in GoModel. Upstream model discovery, ZooCode header spoofing, and subscription-only access."
 icon: "code"
 ---
 
@@ -29,16 +29,17 @@ providers:
   `KIMI_BASE_URL` is optional and defaults to `https://api.kimi.com/coding/v1`.
 </Note>
 
-## Synthetic model list
+## Model discovery
 
-Kimi does not expose a `/models` endpoint, so GoModel returns a synthetic list
-containing exactly one model:
+Kimi exposes a `/models` endpoint, so GoModel automatically discovers its model
+list from the upstream API. The provider currently returns one model:
 
 | Model ID | Description |
 | -------- | ----------- |
 | `kimi-for-coding` | Kimi for Coding subscription model |
 
-No `KIMI_MODELS` configuration is required. The model is always available.
+No `KIMI_MODELS` configuration is required. The model list is fetched from the
+upstream API at runtime.
 
 ## Header spoofing
 

@@ -5,7 +5,6 @@ import (
 	"context"
 	"io"
 	"net/http"
-	"time"
 
 	"gomodel/internal/core"
 	"gomodel/internal/llmclient"
@@ -96,21 +95,10 @@ func (p *Provider) StreamChatCompletion(ctx context.Context, req *core.ChatReque
 	return p.compat.StreamChatCompletion(ctx, req)
 }
 
-// ListModels returns a synthetic model list for Kimi.
+// ListModels retrieves the list of available models from Kimi
 func (p *Provider) ListModels(ctx context.Context) (*core.ModelsResponse, error) {
-	return &core.ModelsResponse{
-		Object: "list",
-		Data: []core.Model{
-			{
-				ID:      "kimi-for-coding",
-				Object:  "model",
-				OwnedBy: "kimi",
-				Created: time.Now().Unix(),
-			},
-		},
-	}, nil
+	return p.compat.ListModels(ctx)
 }
-
 // Responses sends a Responses API request to Kimi.
 func (p *Provider) Responses(ctx context.Context, req *core.ResponsesRequest) (*core.ResponsesResponse, error) {
 	return p.compat.Responses(ctx, req)

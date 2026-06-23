@@ -610,8 +610,18 @@ func TestHeaderSpoofing(t *testing.T) {
 	}
 }
 
-func TestListModels_Synthetic(t *testing.T) {
-	provider := NewWithHTTPClient("test-api-key", nil, llmclient.Hooks{})
+func TestListModels_Upstream(t *testing.T) {
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"kimi-for-coding","object":"model","owned_by":"kimi"}]}`))
+	}))
+	defer server.Close()
+
+	provider := NewWithHTTPClient("test-api-key", server.Client(), llmclient.Hooks{})
+	provider.SetBaseURL(server.URL)
 
 	resp, err := provider.ListModels(context.Background())
 	if err != nil {
@@ -635,7 +645,7 @@ func TestListModels_Synthetic(t *testing.T) {
 	if resp.Data[0].OwnedBy != "kimi" {
 		t.Errorf("Data[0].OwnedBy = %q, want %q", resp.Data[0].OwnedBy, "kimi")
 	}
-	if resp.Data[0].Created <= 0 {
-		t.Errorf("Data[0].Created = %d, want > 0", resp.Data[0].Created)
+	if !called {
+		t.Fatal("expected mock server handler to be called")
 	}
 }
