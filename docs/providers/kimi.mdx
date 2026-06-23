@@ -43,16 +43,23 @@ No `KIMI_MODELS` configuration is required. The model is always available.
 ## Header spoofing
 
 Kimi for Coding only accepts requests from permitted user agents. GoModel
-automatically sets the following ZooCode-identifying headers on every upstream
-request:
+automatically sets the following natural headers on every upstream request so
+that traffic looks like a real browser/SDK:
 
+- `Accept: application/json`
+- `Accept-Encoding: gzip, deflate`
+- `Accept-Language: *`
 - `Content-Type: application/json`
 - `Http-Referer: https://github.com/Zoo-Code-Org/Zoo-Code`
+- `Sec-Fetch-Mode: cors`
 - `User-Agent: ZooCode/3.62.0`
+- `X-Stainless-Arch: x64`
+- `X-Stainless-Lang: js`
+- `X-Stainless-Os: Linux`
+- `X-Stainless-Package-Version: 5.12.2`
+- `X-Stainless-Retry-Count: 0`
+- `X-Stainless-Runtime: node`
+- `X-Stainless-Runtime-Version: v22.22.1`
 - `X-Title: Zoo Code`
-
-Standard browser/SDK metadata (`Accept-*`, `Connection`, `Sec-Fetch-Mode`,
-`X-Stainless-*`) is intentionally omitted because an API server does not
-validate them for access control.
 
 No manual configuration is needed.
