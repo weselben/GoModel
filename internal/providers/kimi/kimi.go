@@ -64,7 +64,6 @@ func setHeaders(req *http.Request, apiKey string) {
 	})
 
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Accept-Encoding", "gzip, deflate")
 	req.Header.Set("Accept-Language", "*")
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Http-Referer", "https://github.com/Zoo-Code-Org/Zoo-Code")

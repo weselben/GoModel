@@ -17,7 +17,6 @@ import (
 // expectedHeaders maps all spoofed headers to their expected values.
 var expectedHeaders = map[string]string{
 	"Accept":                     "application/json",
-	"Accept-Encoding":            "gzip, deflate",
 	"Accept-Language":            "*",
 	"Content-Type":               "application/json",
 	"Http-Referer":               "https://github.com/Zoo-Code-Org/Zoo-Code",
