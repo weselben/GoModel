@@ -1,0 +1,66 @@
+---
+title: "Kimi"
+description: "Configure Kimi for Coding in GoModel. Synthetic model list, ZooCode header spoofing, and subscription-only access."
+icon: "code"
+---
+
+Kimi for Coding is a subscription-only provider with an OpenAI-compatible
+API. GoModel handles model discovery automatically — the only available model
+is `kimi-for-coding` — and spoofs ZooCode client headers on every request so
+upstream accepts the connection.
+
+## Configure
+
+```bash
+KIMI_API_KEY=...
+```
+
+Or in `config.yaml`:
+
+```yaml
+providers:
+  kimi:
+    type: kimi
+    base_url: "https://api.kimi.com/coding/v1"
+    api_key: "${KIMI_API_KEY}"
+```
+
+<Note>
+  `KIMI_BASE_URL` is optional and defaults to `https://api.kimi.com/coding/v1`.
+</Note>
+
+## Synthetic model list
+
+Kimi does not expose a `/models` endpoint, so GoModel returns a synthetic list
+containing exactly one model:
+
+| Model ID | Description |
+| -------- | ----------- |
+| `kimi-for-coding` | Kimi for Coding subscription model |
+
+No `KIMI_MODELS` configuration is required. The model is always available.
+
+## Header spoofing
+
+Kimi for Coding only accepts requests from permitted user agents. GoModel
+automatically sets the following headers on every upstream request to match
+the official ZooCode client:
+
+- `Accept: application/json`
+- `Accept-Encoding: gzip, deflate`
+- `Accept-Language: *`
+- `Connection: keep-alive`
+- `Content-Type: application/json`
+- `Http-Referer: https://github.com/Zoo-Code-Org/Zoo-Code`
+- `Sec-Fetch-Mode: cors`
+- `User-Agent: ZooCode/3.62.0`
+- `X-Stainless-Arch: x64`
+- `X-Stainless-Lang: js`
+- `X-Stainless-Os: Linux`
+- `X-Stainless-Package-Version: 5.12.2`
+- `X-Stainless-Retry-Count: 0`
+- `X-Stainless-Runtime: node`
+- `X-Stainless-Runtime-Version: v22.22.1`
+- `X-Title: Zoo Code`
+
+No manual configuration is needed.

@@ -25,6 +25,7 @@ support, not every individual model capability exposed by an upstream provider.
 | Google Vertex AI | `VERTEX_PROJECT` + `VERTEX_LOCATION` + GCP credentials | `google/gemini-2.5-flash` | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | [Google Vertex AI](/providers/vertex) |
 | DeepSeek | `DEEPSEEK_API_KEY` | `deepseek-v4-pro` | ✅ | ✅ | ❌ | ❌ | ❌ | ✅ | [DeepSeek](/providers/deepseek) |
 | Groq | `GROQ_API_KEY` | `llama-3.3-70b-versatile` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | — |
+| Kimi | `KIMI_API_KEY` | `kimi-for-coding` | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | [Kimi](/providers/kimi) |
 | OpenRouter | `OPENROUTER_API_KEY` | `google/gemini-2.5-flash` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — |
 | Z.ai | `ZAI_API_KEY` (`ZAI_BASE_URL` optional) | `glm-5.1` | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ | — |
 | xAI (Grok) | `XAI_API_KEY` | `grok-4` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | — |
@@ -49,6 +50,9 @@ support, not every individual model capability exposed by an upstream provider.
   MiMo's chat-completions audio dialect) as well as directly via chat
   completions; for 1M context append `[1m]` to the model ID and list it in
   `XIAOMI_MODELS`.
+- **Kimi** — synthetic model list (`kimi-for-coding` only), ZooCode header
+  spoofing enabled automatically. Set `KIMI_API_KEY`; the base URL defaults to
+  `https://api.kimi.com/coding/v1`.
 - **OpenCode Go (OpenCode Zen)** — routes per model: most models use
   OpenAI-style `/chat/completions`, while `/messages`-only models (default
   `qwen3.7-max`, override with `OPENCODE_GO_MESSAGES_MODELS`) are sent to the
