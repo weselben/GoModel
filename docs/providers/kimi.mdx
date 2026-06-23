@@ -64,3 +64,19 @@ that traffic looks like a real browser/SDK:
 - `X-Title: Zoo Code`
 
 No manual configuration is needed.
+
+## Passthrough
+
+Kimi can be used through the passthrough API at `/p/kimi/...`.
+
+<Note>
+  If you use a custom `config.yaml`, add `kimi` to `enabled_passthrough_providers`:
+
+  ```yaml
+  server:
+    enabled_passthrough_providers: ["openai", "anthropic", "openrouter", "zai", "vllm", "deepseek", "bailian", "kimi"]
+  ```
+
+  The provider is enabled by default when using GoModel's built-in defaults, but a
+  custom config file overrides that list.
+</Note>
