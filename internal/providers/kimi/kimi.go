@@ -57,26 +57,17 @@ func NewWithHTTPClient(apiKey string, httpClient *http.Client, hooks llmclient.H
 }
 
 // setHeaders sets the required headers for Kimi API requests.
+// Only ZooCode-identifying headers are spoofed; standard browser/SDK
+// metadata (Accept-*, Connection, Sec-Fetch-Mode, X-Stainless-*) is
+// omitted because an API server does not validate them for access control.
 func setHeaders(req *http.Request, apiKey string) {
 	providers.SetAuthHeaders(req, apiKey, providers.AuthHeaderConfig{
 		AuthScheme: "Bearer ",
 	})
 
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Accept-Encoding", "gzip, deflate")
-	req.Header.Set("Accept-Language", "*")
-	req.Header.Set("Connection", "keep-alive")
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Http-Referer", "https://github.com/Zoo-Code-Org/Zoo-Code")
-	req.Header.Set("Sec-Fetch-Mode", "cors")
 	req.Header.Set("User-Agent", "ZooCode/3.62.0")
-	req.Header.Set("X-Stainless-Arch", "x64")
-	req.Header.Set("X-Stainless-Lang", "js")
-	req.Header.Set("X-Stainless-Os", "Linux")
-	req.Header.Set("X-Stainless-Package-Version", "5.12.2")
-	req.Header.Set("X-Stainless-Retry-Count", "0")
-	req.Header.Set("X-Stainless-Runtime", "node")
-	req.Header.Set("X-Stainless-Runtime-Version", "v22.22.1")
 	req.Header.Set("X-Title", "Zoo Code")
 }
 

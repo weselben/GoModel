@@ -16,22 +16,10 @@ import (
 
 // expectedHeaders maps all spoofed headers to their expected values.
 var expectedHeaders = map[string]string{
-	"Accept":                       "application/json",
-	"Accept-Encoding":              "gzip, deflate",
-	"Accept-Language":              "*",
-	"Connection":                   "keep-alive",
-	"Content-Type":                 "application/json",
-	"Http-Referer":                 "https://github.com/Zoo-Code-Org/Zoo-Code",
-	"Sec-Fetch-Mode":               "cors",
-	"User-Agent":                   "ZooCode/3.62.0",
-	"X-Stainless-Arch":             "x64",
-	"X-Stainless-Lang":             "js",
-	"X-Stainless-Os":               "Linux",
-	"X-Stainless-Package-Version":  "5.12.2",
-	"X-Stainless-Retry-Count":    "0",
-	"X-Stainless-Runtime":          "node",
-	"X-Stainless-Runtime-Version":  "v22.22.1",
-	"X-Title":                      "Zoo Code",
+	"Content-Type":  "application/json",
+	"Http-Referer":  "https://github.com/Zoo-Code-Org/Zoo-Code",
+	"User-Agent":    "ZooCode/3.62.0",
+	"X-Title":       "Zoo Code",
 }
 
 func verifySpoofedHeaders(t *testing.T, r *http.Request) {
