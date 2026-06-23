@@ -16,7 +16,7 @@ import (
 	"gomodel/internal/usage"
 )
 
-var defaultEnabledPassthroughProviders = []string{"openai", "anthropic", "openrouter", "zai", "vllm", "deepseek", "kimi"}
+var defaultEnabledPassthroughProviders = []string{"openai", "anthropic", "openrouter", "zai", "vllm", "deepseek", "kimi", "bailian"}
 
 func (h *Handler) setEnabledPassthroughProviders(providerTypes []string) {
 	h.enabledPassthroughProviders = normalizeEnabledPassthroughProviders(providerTypes)

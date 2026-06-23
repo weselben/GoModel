@@ -118,7 +118,7 @@ func TestBuildDefaultConfig(t *testing.T) {
 	if !cfg.Server.AllowPassthroughV1Alias {
 		t.Error("expected Server.AllowPassthroughV1Alias=true")
 	}
-	if got, want := cfg.Server.EnabledPassthroughProviders, []string{"openai", "anthropic", "openrouter", "zai", "vllm", "deepseek"}; !reflect.DeepEqual(got, want) {
+	if got, want := cfg.Server.EnabledPassthroughProviders, []string{"openai", "anthropic", "openrouter", "zai", "vllm", "deepseek", "bailian", "kimi"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("expected Server.EnabledPassthroughProviders=%v, got %v", want, got)
 	}
 	if cfg.Models.ConfiguredProviderModelsMode != ConfiguredProviderModelsModeFallback {
