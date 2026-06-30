@@ -65,7 +65,7 @@ curl http://localhost:8080/v1/chat/completions \
 
 GoModel supports OpenAI, Anthropic, Google Gemini, Vertex AI, DeepSeek, Groq,
 OpenRouter, Z.ai, xAI (Grok), Alibaba Cloud Model Studio (Bailian), MiniMax,
-Xiaomi MiMo, OpenCode Go, Azure OpenAI, Oracle, Ollama, vLLM, Amazon Bedrock,
+Kimi, Xiaomi MiMo, OpenCode Go, Azure OpenAI, Oracle, Ollama, vLLM, Amazon Bedrock,
 and all OpenAI-compatible providers.
 
 See the [Providers Overview](./docs/providers/overview.mdx) for the full
