@@ -37,8 +37,10 @@ var _ core.Provider = (*Provider)(nil)
 // New creates a new MiniMax provider.
 func New(cfg providers.ProviderConfig, opts providers.ProviderOptions) core.Provider {
 	return &Provider{openai.NewChatCompatible(cfg.APIKey, opts, openai.CompatibleProviderConfig{
-		ProviderName: "minimax",
-		BaseURL:      providers.ResolveBaseURL(cfg.BaseURL, defaultBaseURL),
+		ProviderName:            "minimax",
+		BaseURL:                 providers.ResolveBaseURL(cfg.BaseURL, defaultBaseURL),
+		CustomHeaders:           cfg.CustomHeaders,
+		PassthroughUserHeaders:  cfg.PassthroughUserHeaders,
 	})}
 }
 

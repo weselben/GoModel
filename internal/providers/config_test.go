@@ -1516,6 +1516,124 @@ func TestResolveProviders_SingleCustomNamedProviderDoesNotDuplicateTypeKey(t *te
 	}
 }
 
+// boolPtr returns a pointer to the supplied bool value. Used to populate
+// *bool fields like RawProviderConfig.PassthroughUserHeaders in tests.
+func boolPtr(b bool) *bool { return &b }
+
+// --- per-provider header fields ---
+
+// TestBuildProviderConfig_KimiPassthroughDefaultTrue verifies that the
+// per-provider default for PassthroughUserHeaders is true when the provider
+// type is "kimi" (and the YAML field is left nil).
+func TestBuildProviderConfig_KimiPassthroughDefaultTrue(t *testing.T) {
+	raw := config.RawProviderConfig{Type: "kimi", APIKey: "sk-kimi"}
+	got := buildProviderConfig(raw, globalResilience)
+
+	if !got.PassthroughUserHeaders {
+		t.Errorf("kimi default PassthroughUserHeaders = false, want true")
+	}
+}
+
+// TestBuildProviderConfig_NonKimiPassthroughDefaultFalse verifies that any
+// non-kimi provider leaves PassthroughUserHeaders false when the YAML field
+// is unset.
+func TestBuildProviderConfig_NonKimiPassthroughDefaultFalse(t *testing.T) {
+	cases := []struct {
+		name string
+		typ  string
+	}{
+		{"openai", "openai"},
+		{"anthropic", "anthropic"},
+		{"gemini", "gemini"},
+		{"vertex", "vertex"},
+		{"custom", "custom-provider"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := config.RawProviderConfig{Type: tc.typ, APIKey: "sk"}
+			got := buildProviderConfig(raw, globalResilience)
+
+			if got.PassthroughUserHeaders {
+				t.Errorf("%s default PassthroughUserHeaders = true, want false", tc.typ)
+			}
+		})
+	}
+}
+
+// TestBuildProviderConfig_PassthroughYAMLOverride verifies that an explicit
+// YAML value for PassthroughUserHeaders overrides the per-provider default
+// (true for kimi, false for non-kimi).
+func TestBuildProviderConfig_PassthroughYAMLOverride(t *testing.T) {
+	t.Run("kimi_false", func(t *testing.T) {
+		raw := config.RawProviderConfig{
+			Type:                   "kimi",
+			APIKey:                 "sk-kimi",
+			PassthroughUserHeaders: boolPtr(false),
+		}
+		got := buildProviderConfig(raw, globalResilience)
+		if got.PassthroughUserHeaders {
+			t.Errorf("kimi with explicit PassthroughUserHeaders=false got true, want false")
+		}
+	})
+	t.Run("openai_true", func(t *testing.T) {
+		raw := config.RawProviderConfig{
+			Type:                   "openai",
+			APIKey:                 "sk",
+			PassthroughUserHeaders: boolPtr(true),
+		}
+		got := buildProviderConfig(raw, globalResilience)
+		if !got.PassthroughUserHeaders {
+			t.Errorf("openai with explicit PassthroughUserHeaders=true got false, want true")
+		}
+	})
+}
+
+// TestBuildProviderConfig_PassthroughEnvOverride verifies that the
+// KIMI_PASSTHROUGH_USER_HEADERS env var is applied during
+// applyProviderEnvVars and flows through to the resolved ProviderConfig.
+func TestBuildProviderConfig_PassthroughEnvOverride(t *testing.T) {
+	t.Setenv("KIMI_PASSTHROUGH_USER_HEADERS", "false")
+
+	discovery := map[string]DiscoveryConfig{
+		"kimi": {DefaultBaseURL: "https://api.kimi.com/v1"},
+	}
+	raw := map[string]config.RawProviderConfig{
+		"kimi": {Type: "kimi", APIKey: "sk-kimi"},
+	}
+
+	merged := applyProviderEnvVars(raw, discovery)
+	got := buildProviderConfig(merged["kimi"], globalResilience)
+
+	if got.PassthroughUserHeaders {
+		t.Errorf("KIMI_PASSTHROUGH_USER_HEADERS=false should override kimi default true, got true")
+	}
+}
+
+// TestBuildProviderConfig_CustomHeadersRoundTrip verifies that the YAML
+// custom_headers map is preserved verbatim on the resolved ProviderConfig.
+func TestBuildProviderConfig_CustomHeadersRoundTrip(t *testing.T) {
+	headers := map[string]string{
+		"X-Org-Id":   "acme",
+		"X-Tenant":   "primary",
+		"X-Trace":    "yes",
+	}
+	raw := config.RawProviderConfig{
+		Type:          "openai",
+		APIKey:        "sk",
+		CustomHeaders: headers,
+	}
+	got := buildProviderConfig(raw, globalResilience)
+
+	if len(got.CustomHeaders) != len(headers) {
+		t.Fatalf("CustomHeaders length = %d, want %d", len(got.CustomHeaders), len(headers))
+	}
+	for k, v := range headers {
+		if got.CustomHeaders[k] != v {
+			t.Errorf("CustomHeaders[%q] = %q, want %q", k, got.CustomHeaders[k], v)
+		}
+	}
+}
+
 func TestResolveProviders_NoProvidersNoEnvVars(t *testing.T) {
 	got, filteredRaw := resolveProviders(map[string]config.RawProviderConfig{}, globalResilience, testDiscoveryConfigs)
 	if len(got) != 0 {

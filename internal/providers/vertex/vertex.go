@@ -40,6 +40,12 @@ type Provider struct {
 	nativeClient *llmclient.Client
 	authType     string
 	configErr    error
+
+	// customHeaders and passthrough are operator-defined per-request header
+	// overrides applied at the end of setHeaders. Stored on the struct so the
+	// closure captured by llmclient sees the same values the constructor saw.
+	customHeaders map[string]string
+	passthrough   bool
 }
 
 // New creates a new Vertex AI provider.
@@ -50,7 +56,9 @@ func New(providerCfg providers.ProviderConfig, opts providers.ProviderOptions) c
 func newProvider(providerCfg providers.ProviderConfig, opts providers.ProviderOptions, baseHTTPClient *http.Client) *Provider {
 	providerCfg.Backend = "vertex"
 	p := &Provider{
-		authType: normalizeAuthType(providerCfg),
+		authType:      normalizeAuthType(providerCfg),
+		customHeaders: providerCfg.CustomHeaders,
+		passthrough:   providerCfg.PassthroughUserHeaders,
 	}
 	p.validateConfig(providerCfg)
 
@@ -153,6 +161,9 @@ func (p *Provider) setHeaders(req *http.Request) {
 	if requestID := core.GetRequestID(req.Context()); requestID != "" {
 		req.Header.Set("X-Request-Id", requestID)
 	}
+	// Apply operator-defined per-request header overrides (custom headers
+	// and inbound passthrough) last so they win over the defaults above.
+	providers.ApplyRequestHeaderOverrides(req.Context(), req.Header, p.customHeaders, p.passthrough)
 }
 
 // ChatCompletion sends a chat completion request to Vertex AI Gemini.

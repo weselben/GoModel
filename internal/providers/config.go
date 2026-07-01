@@ -4,6 +4,7 @@ import (
 	"maps"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -33,6 +34,13 @@ type ProviderConfig struct {
 	// these onto remote-registry metadata after enrichment; non-zero fields here
 	// win. Empty/nil when no per-model metadata is declared in YAML.
 	ModelMetadataOverrides map[string]*core.ModelMetadata
+	// CustomHeaders holds operator-defined request headers added on every call
+	// to the upstream provider. Nil/empty when not configured.
+	CustomHeaders map[string]string
+	// PassthroughUserHeaders controls whether request headers from the original
+	// caller are forwarded to the upstream provider. Defaults to true for the
+	// "kimi" provider type, false otherwise (set in buildProviderConfig).
+	PassthroughUserHeaders bool
 	Resilience             config.ResilienceConfig
 }
 
@@ -91,6 +99,7 @@ const (
 	providerEnvFieldServiceAccountJSON
 	providerEnvFieldServiceAccountJSONBase64
 	providerEnvFieldGCPScope
+	providerEnvFieldPassthroughUserHeaders
 )
 
 type providerEnvSource struct {
@@ -114,6 +123,9 @@ type providerEnvValues struct {
 	ServiceAccountJSONBase64 string
 	GCPScope                 string
 	Models                   []string
+	// PassthroughUserHeaders is a *bool so we can distinguish "unset" from
+	// "explicitly false". nil means no env override was supplied.
+	PassthroughUserHeaders *bool
 }
 
 func (v providerEnvValues) empty() bool {
@@ -129,7 +141,8 @@ func (v providerEnvValues) empty() bool {
 		strings.TrimSpace(v.ServiceAccountJSON) == "" &&
 		strings.TrimSpace(v.ServiceAccountJSONBase64) == "" &&
 		strings.TrimSpace(v.GCPScope) == "" &&
-		len(v.Models) == 0
+		len(v.Models) == 0 &&
+		v.PassthroughUserHeaders == nil
 }
 
 func providerEnvSources(providerType string, spec DiscoveryConfig) []providerEnvSource {
@@ -188,6 +201,12 @@ func collectProviderEnvValues(prefix string, spec DiscoveryConfig, environ []str
 			values.ServiceAccountJSONBase64 = value
 		case providerEnvFieldGCPScope:
 			values.GCPScope = value
+		case providerEnvFieldPassthroughUserHeaders:
+			parsed, err := strconv.ParseBool(value)
+			if err != nil {
+				continue
+			}
+			values.PassthroughUserHeaders = &parsed
 		}
 		groups[suffix] = values
 	}
@@ -214,6 +233,7 @@ func parseProviderEnvKey(prefix, key string, spec DiscoveryConfig) (string, prov
 		name  string
 		field providerEnvField
 	}{
+		{name: "PASSTHROUGH_USER_HEADERS", field: providerEnvFieldPassthroughUserHeaders},
 		{name: "API_VERSION", field: providerEnvFieldAPIVersion},
 		{name: "BASE_URL", field: providerEnvFieldBaseURL},
 		{name: "AUTH_TYPE", field: providerEnvFieldAuthType},
@@ -347,6 +367,7 @@ func (v providerEnvValues) rawConfig(providerType string, spec DiscoveryConfig) 
 		ServiceAccountJSONBase64: v.ServiceAccountJSONBase64,
 		GCPScope:                 v.GCPScope,
 		Models:                   rawProviderModelsFromIDs(v.Models),
+		PassthroughUserHeaders:   v.PassthroughUserHeaders,
 	}
 }
 
@@ -399,6 +420,9 @@ func overlayProviderEnvValues(existing config.RawProviderConfig, values provider
 	}
 	if len(values.Models) > 0 {
 		existing.Models = rawProviderModelsFromIDs(values.Models)
+	}
+	if values.PassthroughUserHeaders != nil {
+		existing.PassthroughUserHeaders = values.PassthroughUserHeaders
 	}
 	return existing
 }
@@ -637,6 +661,8 @@ func buildProviderConfig(raw config.RawProviderConfig, global config.ResilienceC
 		GCPScope:                 raw.GCPScope,
 		Models:                   config.ProviderModelIDs(raw.Models),
 		ModelMetadataOverrides:   config.ProviderModelMetadataOverrides(raw.Models),
+		CustomHeaders:            raw.CustomHeaders,
+		PassthroughUserHeaders:   resolvePassthroughUserHeaders(raw),
 		Resilience:               global,
 	}
 
@@ -675,6 +701,17 @@ func buildProviderConfig(raw config.RawProviderConfig, global config.ResilienceC
 	}
 
 	return resolved
+}
+
+// resolvePassthroughUserHeaders applies the *bool default: nil → true for "kimi",
+// false otherwise; non-nil → dereferenced value. Uses the normalized provider
+// type so trailing whitespace and case-insensitive "KIMI" still trigger the
+// default-on behavior.
+func resolvePassthroughUserHeaders(raw config.RawProviderConfig) bool {
+	if raw.PassthroughUserHeaders != nil {
+		return *raw.PassthroughUserHeaders
+	}
+	return strings.EqualFold(normalizeProviderType(raw), "kimi")
 }
 
 func normalizeProviderType(raw config.RawProviderConfig) string {

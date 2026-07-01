@@ -47,6 +47,12 @@ type Provider struct {
 	client *llmclient.Client
 	apiKey string
 
+	// customHeaders and passthrough are operator-defined per-request header
+	// overrides applied at the end of setHeaders. Stored on the struct so the
+	// closure captured by llmclient sees the same values the constructor saw.
+	customHeaders map[string]string
+	passthrough   bool
+
 	batchEndpointsMu sync.RWMutex
 	// batchResultEndpoints keeps endpoint hints by provider batch id and custom_id.
 	// Used only to shape native batch result items (e.g., /v1/responses vs /v1/chat/completions).
@@ -57,6 +63,8 @@ type Provider struct {
 func New(providerCfg providers.ProviderConfig, opts providers.ProviderOptions) core.Provider {
 	p := &Provider{
 		apiKey:               providerCfg.APIKey,
+		customHeaders:        providerCfg.CustomHeaders,
+		passthrough:          providerCfg.PassthroughUserHeaders,
 		batchResultEndpoints: make(map[string]map[string]string),
 	}
 	clientCfg := llmclient.Config{
@@ -164,6 +172,10 @@ func (p *Provider) setHeaders(req *http.Request) {
 	if requestID := core.GetRequestID(req.Context()); requestID != "" {
 		req.Header.Set("X-Request-Id", requestID)
 	}
+
+	// Apply operator-defined per-request header overrides (custom headers
+	// and inbound passthrough) last so they win over the defaults above.
+	providers.ApplyRequestHeaderOverrides(req.Context(), req.Header, p.customHeaders, p.passthrough)
 }
 
 // Passthrough forwards an opaque Anthropic-native request without typed translation.

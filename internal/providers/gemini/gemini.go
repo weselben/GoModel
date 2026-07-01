@@ -54,6 +54,13 @@ type Provider struct {
 	useNativeAPI bool
 	modelsURL    string
 	configErr    error
+
+	// customHeaders and passthrough are operator-defined per-request header
+	// overrides applied at the end of setHeaders/setNativeHeaders. Stored on
+	// the struct so the closure captured by llmclient sees the same values
+	// the constructor saw.
+	customHeaders map[string]string
+	passthrough   bool
 }
 
 // New creates a new Gemini provider.
@@ -80,6 +87,8 @@ func newProvider(providerCfg providers.ProviderConfig, opts providers.ProviderOp
 		authType:     authType,
 		useNativeAPI: useNativeAPI(providerCfg.APIMode),
 		modelsURL:    modelsURL,
+		customHeaders: providerCfg.CustomHeaders,
+		passthrough:   providerCfg.PassthroughUserHeaders,
 	}
 	p.validateConfig(providerCfg)
 	if !preauthenticated {
@@ -235,6 +244,10 @@ func (p *Provider) setHeaders(req *http.Request) {
 	if requestID := core.GetRequestID(req.Context()); requestID != "" {
 		req.Header.Set("X-Request-Id", requestID)
 	}
+
+	// Apply operator-defined per-request header overrides (custom headers
+	// and inbound passthrough) last so they win over the defaults above.
+	providers.ApplyRequestHeaderOverrides(req.Context(), req.Header, p.customHeaders, p.passthrough)
 }
 
 // setNativeHeaders sets the required headers for Gemini native API requests.
@@ -246,6 +259,10 @@ func (p *Provider) setNativeHeaders(req *http.Request) {
 	if requestID := core.GetRequestID(req.Context()); requestID != "" {
 		req.Header.Set("X-Request-Id", requestID)
 	}
+
+	// Apply operator-defined per-request header overrides (custom headers
+	// and inbound passthrough) last so they win over the defaults above.
+	providers.ApplyRequestHeaderOverrides(req.Context(), req.Header, p.customHeaders, p.passthrough)
 }
 
 func normalizeGeminiBackend(cfg providers.ProviderConfig) string {

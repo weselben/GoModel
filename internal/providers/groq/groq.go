@@ -37,9 +37,11 @@ type Provider struct {
 func New(providerCfg providers.ProviderConfig, opts providers.ProviderOptions) core.Provider {
 	return &Provider{
 		compat: openai.NewCompatibleProvider(providerCfg.APIKey, opts, openai.CompatibleProviderConfig{
-			ProviderName: "groq",
-			BaseURL:      providers.ResolveBaseURL(providerCfg.BaseURL, defaultBaseURL),
-			SetHeaders:   setHeaders,
+			ProviderName:            "groq",
+			BaseURL:                 providers.ResolveBaseURL(providerCfg.BaseURL, defaultBaseURL),
+			SetHeaders:              setHeaders,
+			CustomHeaders:           providerCfg.CustomHeaders,
+			PassthroughUserHeaders:  providerCfg.PassthroughUserHeaders,
 		}),
 	}
 }

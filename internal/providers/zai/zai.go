@@ -34,8 +34,10 @@ var _ core.Provider = (*Provider)(nil)
 func New(cfg providers.ProviderConfig, opts providers.ProviderOptions) core.Provider {
 	return &Provider{
 		ChatCompatible: openai.NewChatCompatible(cfg.APIKey, opts, openai.CompatibleProviderConfig{
-			ProviderName: "zai",
-			BaseURL:      providers.ResolveBaseURL(cfg.BaseURL, defaultBaseURL),
+			ProviderName:            "zai",
+			BaseURL:                 providers.ResolveBaseURL(cfg.BaseURL, defaultBaseURL),
+			CustomHeaders:           cfg.CustomHeaders,
+			PassthroughUserHeaders:  cfg.PassthroughUserHeaders,
 		}),
 		apiKey: cfg.APIKey,
 	}

@@ -34,8 +34,10 @@ var _ core.Provider = (*Provider)(nil)
 // New creates a new Xiaomi MiMo provider.
 func New(cfg providers.ProviderConfig, opts providers.ProviderOptions) core.Provider {
 	return &Provider{openai.NewChatCompatible(cfg.APIKey, opts, openai.CompatibleProviderConfig{
-		ProviderName: "xiaomi",
-		BaseURL:      providers.ResolveBaseURL(cfg.BaseURL, defaultBaseURL),
+		ProviderName:           "xiaomi",
+		BaseURL:                providers.ResolveBaseURL(cfg.BaseURL, defaultBaseURL),
+		CustomHeaders:          cfg.CustomHeaders,
+		PassthroughUserHeaders: cfg.PassthroughUserHeaders,
 	})}
 }
 

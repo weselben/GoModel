@@ -18,5 +18,7 @@ type RawProviderConfig struct {
 	ServiceAccountJSONBase64 string               `yaml:"service_account_json_base64"`
 	GCPScope                 string               `yaml:"gcp_scope"`
 	Models                   []RawProviderModel   `yaml:"models"`
+	CustomHeaders            map[string]string    `yaml:"custom_headers"`
+	PassthroughUserHeaders   *bool                `yaml:"passthrough_user_headers"`
 	Resilience               *RawResilienceConfig `yaml:"resilience"`
 }

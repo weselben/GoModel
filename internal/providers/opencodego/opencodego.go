@@ -73,8 +73,10 @@ var _ core.Provider = (*Provider)(nil)
 func New(cfg providers.ProviderConfig, opts providers.ProviderOptions) core.Provider {
 	baseURL := providers.ResolveBaseURL(cfg.BaseURL, defaultBaseURL)
 	chat := openai.NewChatCompatible(cfg.APIKey, opts, openai.CompatibleProviderConfig{
-		ProviderName: "opencode_go",
-		BaseURL:      baseURL,
+		ProviderName:           "opencode_go",
+		BaseURL:                baseURL,
+		CustomHeaders:          cfg.CustomHeaders,
+		PassthroughUserHeaders: cfg.PassthroughUserHeaders,
 	})
 	messages := anthropic.New(providers.ProviderConfig{APIKey: cfg.APIKey, BaseURL: baseURL}, opts)
 	return &Provider{
