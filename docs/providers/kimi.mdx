@@ -1,0 +1,161 @@
+---
+title: "Kimi"
+description: "Configure Kimi (Moonshot AI) in GoModel as a plain OpenAI-compatible provider — no header injection, just standard Bearer auth."
+icon: "sparkles"
+---
+
+[Kimi](https://www.kimi.com/) (Moonshot AI) exposes an OpenAI-compatible API.
+GoModel ships a native `kimi` provider that is a thin wrapper over the shared
+OpenAI-compatible transport — no provider-specific headers, no request
+mutators, and no auth scheme overrides. Authentication uses the standard
+`Authorization: Bearer <api_key>` header.
+
+## Configure
+
+```bash
+KIMI_API_KEY=...
+```
+
+Or in `config.yaml`:
+
+```yaml
+providers:
+  kimi:
+    type: kimi
+    base_url: "https://api.kimi.com/coding/v1"
+    api_key: "${KIMI_API_KEY}"
+```
+
+The default base URL is `https://api.kimi.com/coding/v1`. Override it with
+`KIMI_BASE_URL` or the YAML `base_url` field when you need to point at a
+compatible proxy or alternate Kimi endpoint.
+
+## Authentication
+
+Kimi uses standard Bearer auth. GoModel sets exactly one header on every
+outbound request:
+
+| Header | Value |
+| ------ | ----- |
+| `Authorization` | `Bearer <KIMI_API_KEY>` |
+
+No additional headers are injected by the provider. Kimi is a plain
+OpenAI-compatible wrapper that relies solely on the standard `Authorization`
+header — no provider-specific header injection, no synthetic `User-Agent`,
+and no other static headers are added by GoModel.
+
+## Model IDs
+
+Kimi's `/v1/models` endpoint advertises the model family exposed through the
+configured base URL. Common identifiers include the `kimi-k2` series. Pin the
+advertised set with a configured list when you only want a subset:
+
+```bash
+KIMI_MODELS=kimi-k2-0711-preview,kimi-k2.7-code
+```
+
+By default, `CONFIGURED_PROVIDER_MODELS_MODE=fallback` uses the configured
+list only when the upstream `/models` response is unavailable or empty. Set
+`CONFIGURED_PROVIDER_MODELS_MODE=allowlist` to expose only configured models
+and skip the upstream `/models` call.
+
+## Endpoints
+
+Kimi is served through the standard OpenAI-compatible surface. All of these
+work out of the box:
+
+| Endpoint | Notes |
+| -------- | ----- |
+| `/v1/chat/completions` | Chat completions, including streaming. |
+| `/v1/responses` | Translated to chat completions. |
+| `/v1/embeddings` | Embeddings. |
+| `/v1/models` | Model listing (see [Model IDs](#model-ids)). |
+| `/v1/files` | File uploads and retrieval. |
+| `/v1/batches` | Batch jobs. |
+| `/v1/audio/speech` | Text-to-speech. |
+| `/v1/audio/transcriptions` | Audio transcription. |
+| `/p/kimi/...` | Provider-native passthrough (unchanged). |
+
+## Per-provider header customization
+
+Kimi is the one provider where GoModel **defaults `passthrough_user_headers` to
+`true`**. Inbound request headers (other than a small skip list) are copied
+onto the outbound Kimi request automatically — no opt-in toggle required.
+
+### What passes through
+
+Every inbound header that is **not** on the skip list below is forwarded to
+Kimi verbatim. The skip list is applied **after** authentication and is
+intentionally conservative:
+
+- Credential headers: `Authorization`, `X-Api-Key`
+- Transport-managed: `Host`, `Content-Length`, `Connection`
+- Hop-by-hop (RFC 7230): `Keep-Alive`, `Proxy-Authenticate`,
+  `Proxy-Authorization`, `Te`, `Trailer`, `Transfer-Encoding`, `Upgrade`
+- Cookies and forwarding context: `Cookie`, `Set-Cookie`, `Forwarded`,
+  every `X-Forwarded-*` prefix
+
+Headers are matched after canonicalization (`http.CanonicalHeaderKey`), so
+case and surrounding whitespace do not matter.
+
+### Disable passthrough while keeping custom headers
+
+If you want Kimi to receive **only** the static headers you declare in
+`custom_headers` and nothing from the inbound request, set
+`passthrough_user_headers: false`:
+
+```yaml
+providers:
+  kimi:
+    type: kimi
+    api_key: "${KIMI_API_KEY}"
+    passthrough_user_headers: false
+    custom_headers:
+      X-Trace-Source: "gomodel"
+```
+
+Or via the environment variable (env wins over YAML):
+
+```bash
+KIMI_PASSTHROUGH_USER_HEADERS=false
+```
+
+Note: `custom_headers` is a YAML-only field — it is **not** exposed as an
+environment variable. Use the YAML block above to declare static headers.
+
+### Reference example — static custom headers
+
+If your upstream gateway expects a stable identity bundle on every outbound
+Kimi request, declare the keys it requires in `custom_headers`. The example
+below shows a ZooCode client-identity bundle — GoModel does not ship these
+by default; they are illustrative only:
+
+```yaml
+providers:
+  kimi:
+    type: kimi
+    api_key: "${KIMI_API_KEY}"
+    passthrough_user_headers: false
+    custom_headers:
+      Accept: "application/json"
+      Accept-Encoding: "gzip, deflate"
+      Accept-Language: "*"
+      Connection: "keep-alive"
+      Content-Type: "application/json"
+      Http-Referer: "https://github.com/Zoo-Code-Org/Zoo-Code"
+      Sec-Fetch-Mode: "cors"
+      User-Agent: "ZooCode/3.62.0"
+      X-Stainless-Arch: "x64"
+      X-Stainless-Lang: "js"
+      X-Stainless-Os: "Linux"
+      X-Stainless-Package-Version: "5.12.2"
+      X-Stainless-Retry-Count: "0"
+      X-Stainless-Runtime: "node"
+      X-Stainless-Runtime-Version: "v22.22.1"
+      X-Title: "Zoo Code"
+```
+
+These values are examples of static headers a user might configure. Adjust
+the keys and values to match your own client identity, product name, or
+deployment convention. The `custom_headers` map is forwarded verbatim onto
+every outbound request after authentication is applied.

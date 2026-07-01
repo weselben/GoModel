@@ -118,3 +118,21 @@ YAML is unmarshalled onto a struct that has already been populated with
 built-in defaults. Only fields that appear in the file are written. Omitting
 `max_backoff` from `resilience.retry` leaves it at its built-in default; you do
 not need to repeat defaults you are happy with.
+
+## Provider block fields
+
+Each entry under `providers:` in `config.yaml` accepts the following common
+fields. Provider-specific keys may exist beyond this list — see
+[config/config.example.yaml](https://github.com/ENTERPILOT/GoModel/blob/main/config/config.example.yaml)
+for the full schema.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `type` | string | Provider type (e.g., `openai`, `kimi`, `anthropic`). |
+| `api_key` | string | Provider API key. |
+| `base_url` | string | Optional override for the provider base URL. |
+| `api_version` | string | Optional API version (Azure-specific). |
+| `models` | list | Optional configured model list. |
+| `resilience` | block | Optional per-provider resilience overrides. |
+| `custom_headers` | map<string,string> | Static headers added to every outbound request. |
+| `passthrough_user_headers` | bool | Whether to forward inbound request headers to the upstream provider. Default `false` for all providers except Kimi, which defaults to `true`. |

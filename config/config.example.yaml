@@ -262,6 +262,36 @@ providers:
     # Optional: use GLM Coding Plan endpoint instead of the general endpoint.
     # base_url: "https://api.z.ai/api/coding/paas/v4"
 
+  kimi:
+    type: kimi
+    # base_url: "https://api.kimi.com/coding/v1" # default; override to point at a compatible proxy
+    api_key: "${KIMI_API_KEY}"
+    # Kimi is the one provider that defaults passthrough_user_headers to true,
+    # so inbound headers (other than a small skip list) are forwarded to Kimi
+    # automatically. Set to false to send only the static custom_headers below.
+    passthrough_user_headers: true
+    # custom_headers is a YAML-only field (no env var equivalent). When set,
+    # GoModel adds each entry verbatim to every outbound Kimi request after
+    # the Authorization header — useful when an upstream gateway expects a
+    # stable static header bundle outside of passthrough.
+    # custom_headers:
+    #   Accept: "application/json"
+    #   Accept-Encoding: "gzip, deflate"
+    #   Accept-Language: "*"
+    #   Connection: "keep-alive"
+    #   Content-Type: "application/json"
+    #   Http-Referer: "https://github.com/Zoo-Code-Org/Zoo-Code"
+    #   Sec-Fetch-Mode: "cors"
+    #   User-Agent: "ZooCode/3.62.0"
+    #   X-Stainless-Arch: "x64"
+    #   X-Stainless-Lang: "js"
+    #   X-Stainless-Os: "Linux"
+    #   X-Stainless-Package-Version: "5.12.2"
+    #   X-Stainless-Retry-Count: "0"
+    #   X-Stainless-Runtime: "node"
+    #   X-Stainless-Runtime-Version: "v22.22.1"
+    #   X-Title: "Zoo Code"
+
   xiaomi:
     type: xiaomi
     api_key: "..."

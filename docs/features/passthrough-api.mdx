@@ -68,6 +68,40 @@ Because passthrough is provider-native, the response is also provider-native.
 For Anthropic messages, the response uses Anthropic's message schema, not an
 OpenAI chat completion schema.
 
+## Not the same as `passthrough_user_headers`
+
+The `/p/{provider}` route described above is **not** the same thing as the
+per-provider `passthrough_user_headers` toggle. They solve different problems
+and live in different layers of the gateway:
+
+- `/p/{provider}` is a **provider-native passthrough endpoint**. It forwards the
+  raw request body and a curated set of headers straight to the upstream
+  provider's native API, and it returns the provider-native response. There is
+  no request/response translation and no OpenAI-compatible framing. Use it
+  when a client SDK expects the upstream provider's native API shape, such as
+  the Anthropic SDK targeting `/v1/messages`.
+- `passthrough_user_headers` is a **per-provider configuration toggle** (YAML
+  key and `<PROVIDER>_PASSTHROUGH_USER_HEADERS` environment variable). When
+  enabled for a provider, GoModel copies inbound request headers onto the
+  managed `/v1` request that GoModel sends upstream through the provider's
+  normal route. It does not change the URL shape — `/v1/chat/completions`
+  stays an OpenAI-compatible `/v1` request — and it does not bypass the
+  gateway's request normalization. See the per-provider header customization
+  docs for Kimi for the canonical example and the
+  [provider configuration reference](/advanced/configuration) for the full
+  toggle matrix.
+
+In short:
+
+| Feature | Route shape | Body | Headers | Typical use case |
+| --- | --- | --- | --- | --- |
+| `/p/{provider}` | Provider-native passthrough (`/p/{provider}/...`) | Forwarded as-is | Curated allow list; `Authorization` / `X-Api-Key` always replaced by the server credential | Calling a provider SDK against GoModel |
+| `passthrough_user_headers` | Managed OpenAI-compatible `/v1` route | Normalized by GoModel | Inbound headers copied onto the outbound request, minus a skip list (`Authorization`, `X-Api-Key`, hop-by-hop, cookies, forwarding context) | Forwarding tenant or trace headers while still using the OpenAI-compatible API |
+
+`passthrough_user_headers` skips `Authorization`, `X-Api-Key`, and the usual
+hop-by-hop headers, and the `/p/{provider}` route has its own independent
+header handling. Enabling one does not enable the other.
+
 ## Anthropic SDK example
 
 Set the Anthropic SDK base URL to GoModel's Anthropic passthrough route. Use the

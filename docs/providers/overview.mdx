@@ -29,6 +29,7 @@ support, not every individual model capability exposed by an upstream provider.
 | Z.ai | `ZAI_API_KEY` (`ZAI_BASE_URL` optional) | `glm-5.1` | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ | — |
 | xAI (Grok) | `XAI_API_KEY` | `grok-4` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | — |
 | Alibaba Cloud Model Studio (Bailian) | `BAILIAN_API_KEY` (`BAILIAN_BASE_URL` optional) | `qwen3-max` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | [Alibaba Cloud Model Studio](/providers/bailian) |
+| Kimi | `KIMI_API_KEY` (`KIMI_BASE_URL` optional) | `kimi-k2-0711-preview` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | [Kimi](/providers/kimi) |
 | MiniMax | `MINIMAX_API_KEY` (`MINIMAX_BASE_URL` optional) | `MiniMax-M3` | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ | — |
 | Xiaomi MiMo | `XIAOMI_API_KEY` (`XIAOMI_BASE_URL` optional) | `mimo-v2.5-pro` | ✅ | ✅ | ❌ | ❌ | ❌ | ✅ | [Xiaomi MiMo](/providers/xiaomi) |
 | OpenCode Go | `OPENCODE_GO_API_KEY` (`OPENCODE_GO_BASE_URL` optional) | `glm-5.1` | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | [OpenCode Go](/providers/opencode-go) |
@@ -66,6 +67,18 @@ support, not every individual model capability exposed by an upstream provider.
   for providers that define a list, skipping their upstream `/models` calls.
 - **vLLM** — set `VLLM_API_KEY` only if the upstream server was started with
   `--api-key`.
+- **Per-provider header customization** — each provider block in `config.yaml`
+  accepts two optional fields that control outbound headers: `custom_headers`
+  (a static map of header name to value, sent on every request to that
+  provider) and `passthrough_user_headers` (a boolean that copies inbound
+  request headers onto the outbound request, after a small skip list for
+  credential and transport-managed headers). By default every provider sets
+  `passthrough_user_headers` to `false`; **Kimi is the one exception** and
+  defaults it to `true`. See the [Kimi provider page](/providers/kimi) for the
+  full example, and the [Configuration reference](/advanced/configuration) for
+  the matching env-var details. `custom_headers` is YAML-only — there is no
+  environment-variable equivalent; use `<PROVIDER>_PASSTHROUGH_USER_HEADERS`
+  to toggle the passthrough switch from env.
 - **Multiple instances of one provider type** — without `config.yaml`, use
   suffixed env vars such as `OPENAI_EAST_API_KEY` and `OPENAI_EAST_BASE_URL`;
   add `OPENAI_EAST_MODELS` to configure that instance's model list. This

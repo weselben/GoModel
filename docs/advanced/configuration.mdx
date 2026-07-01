@@ -218,6 +218,8 @@ Set these to automatically register providers. No YAML configuration required.
 
 Most providers can use a custom base URL via `<PROVIDER>_BASE_URL` (for example `OPENAI_BASE_URL`). DeepSeek defaults to `https://api.deepseek.com`; set `DEEPSEEK_BASE_URL` only for a compatible proxy or alternate DeepSeek endpoint. OpenRouter defaults to `https://openrouter.ai/api/v1` and can be overridden with `OPENROUTER_BASE_URL`. Z.ai defaults to `https://api.z.ai/api/paas/v4`; set `ZAI_BASE_URL=https://api.z.ai/api/coding/paas/v4` for the GLM Coding Plan endpoint. vLLM defaults to `http://localhost:8000/v1` when `VLLM_API_KEY` is set, but keyless deployments should set `VLLM_BASE_URL` explicitly to register the provider. Azure uses `AZURE_BASE_URL` for its deployment base URL and accepts an optional `AZURE_API_VERSION` override; otherwise it defaults to `2024-10-21`. Oracle requires `ORACLE_BASE_URL` because its OpenAI-compatible endpoint is region-specific.
 
+Kimi forwards inbound request headers to the upstream by default. For any provider that supports per-request header handling, override that behavior with `<PROVIDER>_PASSTHROUGH_USER_HEADERS=true|false`. For example, `KIMI_PASSTHROUGH_USER_HEADERS=false` disables header passthrough for Kimi without editing the YAML file, which is useful when an upstream rejects inherited `Authorization`, tracing, or routing headers. The env var accepts `true`, `false`, `1`, `0`, `yes`, or `no` (case-insensitive); an empty or invalid value falls back to the provider's default (currently `true` for Kimi, `false` for every other provider).
+
 Every provider type also accepts a comma-separated configured model list via
 `<PROVIDER>_MODELS`, for example `OPENROUTER_MODELS`, `ORACLE_MODELS`,
 `AZURE_MODELS`, or `VLLM_MODELS`. By default,
@@ -458,6 +460,39 @@ providers:
   the exposed inventory for that provider and skips upstream `/models`. For Oracle GenAI, see the [Oracle GenAI
   guide](/providers/oracle) for the required OCI policy and a tested configuration.
 </Note>
+
+#### Per-Provider Header Customization (YAML)
+
+YAML provider blocks also accept two optional header fields, useful when you
+need to override or filter headers sent to a specific upstream. Both apply per
+provider block, so other providers in the same config keep their default
+behavior:
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `custom_headers` | map<string,string> | Static headers added to every outbound request for that provider (for example `X-Trace-Source: "gomodel"`). |
+| `passthrough_user_headers` | bool | Whether to forward inbound request headers to the upstream provider. Default `false` for all providers except Kimi, which defaults to `true`. |
+
+`custom_headers` is YAML-only — it has no environment-variable equivalent.
+`passthrough_user_headers` defaults can also be toggled from the environment
+with `<PROVIDER>_PASSTHROUGH_USER_HEADERS=true|false` (see the per-provider
+notes under `### Auto-Discovery from Environment Variables` above); the env var
+wins over the YAML value.
+
+Example — Kimi with no inbound headers, only the static `X-Trace-Source`:
+
+```yaml
+providers:
+  kimi:
+    type: kimi
+    api_key: "${KIMI_API_KEY}"
+    passthrough_user_headers: false
+    custom_headers:
+      X-Trace-Source: "gomodel"
+```
+
+See the [Kimi provider guide](/providers/kimi) for the full skip list and
+additional examples.
 
 ### Ollama (Local Models)
 
