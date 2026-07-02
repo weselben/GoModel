@@ -283,7 +283,18 @@ func BenchmarkOpenAIResponsesStreamConverter(b *testing.B) {
 }
 
 func BenchmarkSharedStreamingAuditAndUsageObservers(b *testing.B) {
-	auditLogger := benchAuditLogger{cfg: auditlog.Config{Enabled: true, LogBodies: true}}
+	benchmarkSharedStreamingObservers(b, auditlog.Config{Enabled: true, LogBodies: true})
+}
+
+// BenchmarkSharedStreamingObserversDefaultConfig runs the same pipeline with
+// audit body capture disabled — the default configuration, where the stream
+// can skip decoding content-delta chunks.
+func BenchmarkSharedStreamingObserversDefaultConfig(b *testing.B) {
+	benchmarkSharedStreamingObservers(b, auditlog.Config{Enabled: true})
+}
+
+func benchmarkSharedStreamingObservers(b *testing.B, auditCfg auditlog.Config) {
+	auditLogger := benchAuditLogger{cfg: auditCfg}
 	usageLogger := benchUsageLogger{cfg: usage.Config{Enabled: true}}
 
 	b.ReportAllocs()
@@ -388,16 +399,27 @@ func TestHotPathPerfGuard(t *testing.T) {
 			maxBytes:  15104, // baseline ~13.9 KB
 		},
 		{
+			// Typed chunk decoding + reused read buffer keep this converter at a
+			// fraction of its former map[string]any-per-chunk cost (was 202/19.6KB).
 			name:      "openai_responses_stream_converter",
 			bench:     BenchmarkOpenAIResponsesStreamConverter,
-			maxAllocs: 213,   // baseline 202
-			maxBytes:  21120, // baseline ~19.6 KB
+			maxAllocs: 91,        // baseline 85
+			maxBytes:  12 * 1024, // baseline ~9.7 KB (leaves headroom for pool cold-starts)
 		},
 		{
 			name:      "shared_stream_audit_and_usage_observers",
 			bench:     BenchmarkSharedStreamingAuditAndUsageObservers,
-			maxAllocs: 167,      // baseline 159
-			maxBytes:  9 * 1024, // baseline ~8.9 KB; already tight
+			maxAllocs: 160,      // baseline 152
+			maxBytes:  9 * 1024, // baseline ~8.2 KB
+		},
+		{
+			// Default configuration: audit body capture off, so the observed
+			// stream must skip JSON decoding for content-delta chunks entirely.
+			// A regression that decodes every chunk again would blow this limit.
+			name:      "shared_stream_observers_default_config",
+			bench:     BenchmarkSharedStreamingObserversDefaultConfig,
+			maxAllocs: 61,       // baseline 57
+			maxBytes:  4 * 1024, // baseline ~3.0 KB
 		},
 	}
 
