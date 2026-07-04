@@ -73,9 +73,9 @@ func TestSQLiteStoreRecalculatePricingUpdatesFilteredUsageCosts(t *testing.T) {
 			StartDate: time.Date(2026, 4, 12, 0, 0, 0, 0, time.UTC),
 			EndDate:   time.Date(2026, 4, 12, 0, 0, 0, 0, time.UTC),
 			UserPath:  "/team",
+			Provider:  "primary-openai",
+			Model:     "gpt-4o",
 		},
-		Provider: "primary-openai",
-		Model:    "gpt-4o",
 	}, staticTestPricingResolver{
 		"primary-openai/gpt-4o": {
 			InputPerMtok:  &inputRate,
@@ -103,6 +103,76 @@ func TestSQLiteStoreRecalculatePricingUpdatesFilteredUsageCosts(t *testing.T) {
 	}
 	if otherTotal != oldCost {
 		t.Fatalf("other total cost = %.4f, want %.4f", otherTotal, oldCost)
+	}
+}
+
+func TestSQLiteStoreRecalculatePricingFiltersByLabel(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+
+	store, err := NewSQLiteStore(db, 0)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() error = %v", err)
+	}
+
+	oldCost := 99.0
+	ctx := context.Background()
+	entry := func(id string, labels []string) *UsageEntry {
+		return &UsageEntry{
+			ID:          id,
+			RequestID:   "req-" + id,
+			ProviderID:  "provider-" + id,
+			Timestamp:   time.Date(2026, 4, 12, 10, 0, 0, 0, time.UTC),
+			Model:       "gpt-4o",
+			Provider:    "openai",
+			Endpoint:    "/v1/chat/completions",
+			Labels:      labels,
+			InputTokens: 1_000_000,
+			TotalTokens: 1_000_000,
+			InputCost:   &oldCost,
+			TotalCost:   &oldCost,
+		}
+	}
+	if err := store.WriteBatch(ctx, []*UsageEntry{
+		entry("usage-labelled", []string{"env:prod", "batch"}),
+		entry("usage-other-label", []string{"env:staging"}),
+		entry("usage-unlabelled", nil),
+	}); err != nil {
+		t.Fatalf("WriteBatch() error = %v", err)
+	}
+
+	inputRate := 2.0
+	// The padded label exercises normalizedRecalculatePricingParams trimming.
+	result, err := store.RecalculatePricing(ctx, RecalculatePricingParams{
+		UsageQueryParams: UsageQueryParams{Label: " env:prod "},
+	}, staticTestPricingResolver{
+		"openai/gpt-4o": {InputPerMtok: &inputRate},
+	})
+	if err != nil {
+		t.Fatalf("RecalculatePricing() error = %v", err)
+	}
+	if result.Matched != 1 || result.Recalculated != 1 {
+		t.Fatalf("result = %+v, want exactly the labelled row recalculated", result)
+	}
+
+	var labelledCost, otherCost, unlabelledCost float64
+	if err := db.QueryRow(`SELECT total_cost FROM usage WHERE id = 'usage-labelled'`).Scan(&labelledCost); err != nil {
+		t.Fatalf("query labelled row: %v", err)
+	}
+	if labelledCost != 2.0 {
+		t.Fatalf("labelled total cost = %.4f, want 2.0", labelledCost)
+	}
+	if err := db.QueryRow(`SELECT total_cost FROM usage WHERE id = 'usage-other-label'`).Scan(&otherCost); err != nil {
+		t.Fatalf("query other-label row: %v", err)
+	}
+	if err := db.QueryRow(`SELECT total_cost FROM usage WHERE id = 'usage-unlabelled'`).Scan(&unlabelledCost); err != nil {
+		t.Fatalf("query unlabelled row: %v", err)
+	}
+	if otherCost != oldCost || unlabelledCost != oldCost {
+		t.Fatalf("non-matching rows changed: other %.4f unlabelled %.4f, want %.4f", otherCost, unlabelledCost, oldCost)
 	}
 }
 
@@ -148,7 +218,7 @@ func TestSQLiteStoreRecalculatePricingProcessesBatches(t *testing.T) {
 
 	inputRate := 2.0
 	result, err := store.RecalculatePricing(ctx, RecalculatePricingParams{
-		Model: "gpt-4o",
+		UsageQueryParams: UsageQueryParams{Model: "gpt-4o"},
 	}, staticTestPricingResolver{
 		"openai/gpt-4o": {
 			InputPerMtok: &inputRate,

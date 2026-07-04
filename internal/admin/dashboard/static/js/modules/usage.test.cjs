@@ -179,9 +179,10 @@ function createUsageLogApp(overrides = {}) {
         customEndDate: null,
         usageLog: { entries: [], total: 0, limit: 50, offset: 0 },
         usageLogSearch: '',
-        usageLogModel: '',
-        usageLogProvider: '',
-        usageLogUserPath: '',
+        usageFilterModel: '',
+        usageFilterProvider: '',
+        usageFilterLabel: '',
+        usageFilterUserPath: '',
         usageLogHideCached: false,
         _formatDate(date) {
             return date.toISOString().slice(0, 10);
@@ -301,6 +302,182 @@ test('fetchUsageLog switches to cache_mode=uncached when hide-cached toggle is o
 
     assert.equal(fetchCalls.length, 1);
     assert.match(fetchCalls[0].url, /cache_mode=uncached/);
+});
+
+test('fetchUsageLog includes the label filter when set', async () => {
+    const { app, fetchCalls } = createUsageLogApp({ usageFilterLabel: 'team alpha' });
+
+    await app.fetchUsageLog(true);
+
+    assert.equal(fetchCalls.length, 1);
+    assert.match(fetchCalls[0].url, /label=team%20alpha/);
+});
+
+test('fetchCacheOverview follows page filters on the usage page but not on overview', async () => {
+    const make = (page) => createUsageLogApp({
+        page,
+        usageFilterLabel: 'env:prod',
+        usageFilterProvider: 'openai',
+        workflowRuntimeBooleanFlag: () => true
+    });
+
+    const usage = make('usage');
+    await usage.app.fetchCacheOverview();
+    assert.equal(usage.fetchCalls.length, 1);
+    assert.match(usage.fetchCalls[0].url, /label=env%3Aprod/);
+    assert.match(usage.fetchCalls[0].url, /provider=openai/);
+
+    const overview = make('overview');
+    overview.app.renderChart = () => {};
+    await overview.app.fetchCacheOverview();
+    assert.equal(overview.fetchCalls.length, 1);
+    assert.doesNotMatch(overview.fetchCalls[0].url, /label=/);
+    assert.doesNotMatch(overview.fetchCalls[0].url, /provider=/);
+});
+
+test('page filters flow into every usage-page fetch', async () => {
+    const { app, fetchCalls } = createUsageLogApp({
+        usageFilterModel: 'gpt-5',
+        usageFilterProvider: 'openai',
+        usageFilterLabel: 'env:prod',
+        usageFilterUserPath: '/team'
+    });
+
+    await app.fetchUsagePageSummary();
+    await app.fetchModelUsage();
+    await app.fetchLabelUsage();
+    await app.fetchUsageLog(true);
+
+    // The summary fetch issues one request per cache mode.
+    assert.equal(fetchCalls.length, 5);
+    for (const call of fetchCalls) {
+        assert.match(call.url, /model=gpt-5/);
+        assert.match(call.url, /provider=openai/);
+        assert.match(call.url, /label=env%3Aprod/);
+        assert.match(call.url, /user_path=%2Fteam/);
+    }
+    assert.match(fetchCalls[0].url, /\/admin\/usage\/summary\?/);
+});
+
+test('usage page stat cards follow the log cache scope and derive hits from the two summaries', () => {
+    const module = createUsageModule();
+    module.formatNumber = (n) => String(n);
+    module.formatCost = (v) => (v === null || v === undefined ? '---' : '$' + Number(v).toFixed(2));
+    module.usageSummary = { total_requests: 90, total_cost: 1.5, total_input_cost: 1.0, total_output_cost: 0.5 };
+    module.usageSummaryAll = { total_requests: 100 };
+    module.usageLogHideCached = false;
+
+    // Default log view shows cached rows, so the card counts all rows —
+    // independent of the cache-analytics flag.
+    assert.equal(module.usagePageTotalRequests(), 100);
+    assert.equal(module.usagePageRequestsTitle(), '90 to providers + 10 from cache');
+    assert.equal(module.usagePageCostTitle(), '$1.00 input + $0.50 output');
+
+    // Hiding cached rows narrows the card to provider requests, like the log.
+    module.usageLogHideCached = true;
+    assert.equal(module.usagePageTotalRequests(), 90);
+    assert.equal(module.usagePageRequestsTitle(), '10 cached requests hidden');
+
+    // No cached traffic: plain count, no tooltip.
+    module.usageLogHideCached = false;
+    module.usageSummaryAll = { total_requests: 90 };
+    assert.equal(module.usagePageTotalRequests(), 90);
+    assert.equal(module.usagePageRequestsTitle(), '');
+
+    module.usageSummary = {};
+    assert.equal(module.usagePageCostTitle(), '');
+});
+
+test('fetchUsagePageSummary loads uncached and all cache modes with the page filters', async () => {
+    const { app, fetchCalls } = createUsageLogApp({ usageFilterLabel: 'env:prod' });
+
+    await app.fetchUsagePageSummary();
+
+    assert.equal(fetchCalls.length, 2);
+    const urls = fetchCalls.map((c) => c.url);
+    assert.ok(urls.every((u) => u.includes('/admin/usage/summary?') && u.includes('label=env%3Aprod')), urls.join(' '));
+    assert.ok(urls.some((u) => u.includes('cache_mode=uncached')), urls.join(' '));
+    assert.ok(urls.some((u) => u.includes('cache_mode=all')), urls.join(' '));
+});
+
+test('facet option getters sort choices and keep a stale selection listed', () => {
+    const module = createUsageModule();
+    module.usageFacetOptions = { models: ['gpt-5'], providers: ['openai'], labels: ['prod', 'alpha'] };
+    module.usageFilterModel = '';
+    module.usageFilterProvider = '';
+    module.usageFilterLabel = '';
+
+    assert.equal(JSON.stringify(module.usageFilterLabelOptions()), JSON.stringify(['alpha', 'prod']));
+    assert.equal(JSON.stringify(module.usageFilterModelOptions()), JSON.stringify(['gpt-5']));
+
+    module.usageFilterLabel = 'removed';
+    assert.equal(JSON.stringify(module.usageFilterLabelOptions()), JSON.stringify(['alpha', 'prod', 'removed']));
+});
+
+test('facet options honor every filter except their own', async () => {
+    const { app, fetchCalls } = createUsageLogApp({
+        usageFilterModel: 'gpt-5',
+        usageFilterProvider: 'openai',
+        usageFilterLabel: 'env:prod',
+        usageFilterUserPath: '/team'
+    });
+
+    await app.fetchUsageFacetOptions();
+
+    assert.equal(fetchCalls.length, 3);
+    const byEndpoint = (endpoint, without, withs) => {
+        const matches = fetchCalls.filter((c) => c.url.includes(endpoint) && !c.url.includes(without + '='));
+        assert.equal(matches.length, 1, `expected one ${endpoint} call without ${without}: ${fetchCalls.map((c) => c.url).join(' ')}`);
+        for (const param of withs) {
+            assert.ok(matches[0].url.includes(param), `${matches[0].url} should include ${param}`);
+        }
+    };
+    byEndpoint('/admin/usage/models', 'model', ['provider=openai', 'label=env%3Aprod', 'user_path=%2Fteam']);
+    byEndpoint('/admin/usage/models', 'provider', ['model=gpt-5', 'label=env%3Aprod', 'user_path=%2Fteam']);
+    byEndpoint('/admin/usage/labels', 'label', ['model=gpt-5', 'provider=openai', 'user_path=%2Fteam']);
+});
+
+test('facet options share one by-model query when neither model nor provider filters', async () => {
+    const { app, fetchCalls } = createUsageLogApp({ usageFilterLabel: 'env:prod' });
+
+    await app.fetchUsageFacetOptions();
+
+    assert.equal(fetchCalls.length, 2);
+    assert.equal(fetchCalls.filter((c) => c.url.includes('/admin/usage/models')).length, 1);
+    assert.equal(fetchCalls.filter((c) => c.url.includes('/admin/usage/labels')).length, 1);
+});
+
+test('toggleUsageLabelFilter sets and clears the page label filter, refetching the page', () => {
+    const module = createUsageModule();
+    let pageFetches = 0;
+    module.fetchUsagePage = () => { pageFetches++; };
+    module.usageFilterLabel = '';
+
+    module.toggleUsageLabelFilter('prod');
+    assert.equal(module.usageFilterLabel, 'prod');
+
+    module.toggleUsageLabelFilter('prod');
+    assert.equal(module.usageFilterLabel, '');
+    assert.equal(pageFetches, 2);
+});
+
+test('usageLogHasLabels reflects aggregates, active filter, or labelled entries', () => {
+    const module = createUsageModule();
+    module.labelUsage = [];
+    module.usageFilterLabel = '';
+    module.usageLog = { entries: [{ labels: null }, {}] };
+    assert.equal(module.usageLogHasLabels(), false);
+
+    module.usageLog = { entries: [{ labels: ['alpha'] }] };
+    assert.equal(module.usageLogHasLabels(), true);
+
+    module.usageLog = { entries: [] };
+    module.usageFilterLabel = 'alpha';
+    assert.equal(module.usageLogHasLabels(), true);
+
+    module.usageFilterLabel = '';
+    module.labelUsage = [{ label: 'alpha' }];
+    assert.equal(module.usageLogHasLabels(), true);
 });
 
 function createCacheMeterModule({ summary = {}, cacheOverview = null, cacheEnabled = false } = {}) {

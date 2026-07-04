@@ -201,6 +201,30 @@
                 return 'days=' + this.days;
             },
 
+            // Page-level data filters, applied to every usage-page request so
+            // charts, cache cards, and the request log describe the same
+            // filtered slice of traffic. excludeFacet omits that one filter —
+            // used to build facet dropdown options that honor every filter
+            // except their own.
+            _usageFilterQueryStr(excludeFacet) {
+                const filters = [
+                    ['model', this.usageFilterModel],
+                    ['provider', this.usageFilterProvider],
+                    ['label', this.usageFilterLabel],
+                    ['user_path', this.usageFilterUserPath]
+                ];
+                let qs = '';
+                for (const [facet, value] of filters) {
+                    if (!value || facet === excludeFacet) continue;
+                    qs += '&' + facet + '=' + encodeURIComponent(value);
+                }
+                return qs;
+            },
+
+            onUsageFilterChanged() {
+                this.fetchUsagePage();
+            },
+
             async fetchCacheOverview() {
                 if (!this.cacheOverviewVisible()) {
                     return;
@@ -220,14 +244,12 @@
                     if (controller) {
                         options.signal = controller.signal;
                     }
-                    let queryStr;
-                    if (this.customStartDate && this.customEndDate) {
-                        queryStr = 'start_date=' + this._formatDate(this.customStartDate) +
-                            '&end_date=' + this._formatDate(this.customEndDate);
-                    } else {
-                        queryStr = 'days=' + this.days;
+                    let queryStr = this._usageQueryStr() + '&interval=' + this.interval;
+                    // The usage page filters its cache cards along with the
+                    // rest of the page; the overview page stays unfiltered.
+                    if (this.page === 'usage') {
+                        queryStr += this._usageFilterQueryStr();
                     }
-                    queryStr += '&interval=' + this.interval;
 
                     const res = await fetch('/admin/cache/overview?' + queryStr, options);
                     const handled = this.handleFetchResponse(res, 'cache overview', options);
@@ -344,13 +366,157 @@
             },
 
             async fetchUsagePage() {
-                const requests = [this.fetchModelUsage(), this.fetchUserPathUsage(), this.fetchUsageLog(true)];
+                const requests = [this.fetchUsagePageSummary(), this.fetchUsageFacetOptions(), this.fetchModelUsage(), this.fetchUserPathUsage(), this.fetchLabelUsage(), this.fetchUsageLog(true)];
                 if (this.cacheAnalyticsEnabled()) {
                     requests.push(this.fetchCacheOverview());
                 }
                 await Promise.all(requests);
                 this.renderBarChart();
                 this.renderUserPathChart();
+                this.renderLabelChart();
+            },
+
+            // Facet dropdown options follow the faceted-search rule: each
+            // facet's choices honor every active filter except its own, so a
+            // selected value never erases its alternatives.
+            async fetchUsageFacetOptions() {
+                let controller = null;
+                try {
+                    controller = typeof this._startAbortableRequest === 'function'
+                        ? this._startAbortableRequest('_usageFacetOptionsFetchController')
+                        : null;
+                    const options = typeof this.requestOptions === 'function' ? this.requestOptions() : { headers: this.headers() };
+                    if (controller) {
+                        options.signal = controller.signal;
+                    }
+                    const fetchRows = async (endpoint, excludeFacet) => {
+                        const res = await fetch(endpoint + '?' + this._usageQueryStr() + this._usageFilterQueryStr(excludeFacet), options);
+                        const handled = this.handleFetchResponse(res, 'usage facet options', options);
+                        if (typeof this.isStaleAuthFetchResult === 'function' && this.isStaleAuthFetchResult(handled)) {
+                            return null;
+                        }
+                        if (!handled) return [];
+                        const payload = await res.json();
+                        return Array.isArray(payload) ? payload : [];
+                    };
+                    // Without a model or provider filter, the two by-model
+                    // queries are identical; fetch once and reuse.
+                    const modelRowsPromise = fetchRows('/admin/usage/models', 'model');
+                    const sharedByModel = !this.usageFilterModel && !this.usageFilterProvider;
+                    const [modelRows, providerRows, labelRows] = await Promise.all([
+                        modelRowsPromise,
+                        sharedByModel ? modelRowsPromise : fetchRows('/admin/usage/models', 'provider'),
+                        fetchRows('/admin/usage/labels', 'label')
+                    ]);
+                    if ((controller && controller.signal.aborted) || modelRows === null || providerRows === null || labelRows === null) {
+                        return;
+                    }
+                    const providerOf = (row) => typeof this.providerDisplayValue === 'function'
+                        ? this.providerDisplayValue(row)
+                        : String((row && (row.provider_name || row.provider)) || '').trim();
+                    this.usageFacetOptions = {
+                        models: modelRows.map((row) => row && row.model).filter(Boolean),
+                        providers: providerRows.map(providerOf).filter(Boolean),
+                        labels: labelRows.map((row) => row && row.label).filter(Boolean)
+                    };
+                } catch (e) {
+                    if (typeof this._isAbortError === 'function' && this._isAbortError(e)) {
+                        return;
+                    }
+                    console.error('Failed to fetch usage facet options:', e);
+                    this.usageFacetOptions = { models: [], providers: [], labels: [] };
+                } finally {
+                    if (typeof this._clearAbortableRequest === 'function') {
+                        this._clearAbortableRequest('_usageFacetOptionsFetchController', controller);
+                    }
+                }
+            },
+
+            // Filtered summaries backing the usage-page stat cards, fetched in
+            // both cache modes: uncached carries real provider spend (cached
+            // rows store the avoided cost, which must not inflate the cost
+            // card), all carries the row count matching the log's default
+            // view. Kept separate from the overview page's unfiltered
+            // `summary` state.
+            async fetchUsagePageSummary() {
+                let controller = null;
+                try {
+                    controller = typeof this._startAbortableRequest === 'function'
+                        ? this._startAbortableRequest('_usagePageSummaryFetchController')
+                        : null;
+                    const options = typeof this.requestOptions === 'function' ? this.requestOptions() : { headers: this.headers() };
+                    if (controller) {
+                        options.signal = controller.signal;
+                    }
+                    const baseQs = this._usageQueryStr() + this._usageFilterQueryStr();
+                    const [uncachedRes, allRes] = await Promise.all([
+                        fetch('/admin/usage/summary?' + baseQs + '&cache_mode=uncached', options),
+                        fetch('/admin/usage/summary?' + baseQs + '&cache_mode=all', options)
+                    ]);
+                    const uncachedHandled = this.handleFetchResponse(uncachedRes, 'usage page summary', options);
+                    const allHandled = this.handleFetchResponse(allRes, 'usage page summary (all)', options);
+                    if (typeof this.isStaleAuthFetchResult === 'function' &&
+                        (this.isStaleAuthFetchResult(uncachedHandled) || this.isStaleAuthFetchResult(allHandled))) {
+                        return;
+                    }
+                    if (!uncachedHandled || !allHandled) {
+                        this.usageSummary = this.emptyUsageSummary();
+                        this.usageSummaryAll = this.emptyUsageSummary();
+                        return;
+                    }
+                    const [uncached, all] = await Promise.all([uncachedRes.json(), allRes.json()]);
+                    if (controller && controller.signal.aborted) {
+                        return;
+                    }
+                    this.usageSummary = uncached && typeof uncached === 'object' ? uncached : this.emptyUsageSummary();
+                    this.usageSummaryAll = all && typeof all === 'object' ? all : this.emptyUsageSummary();
+                } catch (e) {
+                    if (typeof this._isAbortError === 'function' && this._isAbortError(e)) {
+                        return;
+                    }
+                    console.error('Failed to fetch usage page summary:', e);
+                    this.usageSummary = this.emptyUsageSummary();
+                    this.usageSummaryAll = this.emptyUsageSummary();
+                } finally {
+                    if (typeof this._clearAbortableRequest === 'function') {
+                        this._clearAbortableRequest('_usagePageSummaryFetchController', controller);
+                    }
+                }
+            },
+
+            // Locally-cached requests over the period and filters, derived as
+            // the difference between the two summaries so the number stays
+            // correct even when cache analytics is disabled.
+            usagePageCacheHits() {
+                const all = Number((this.usageSummaryAll && this.usageSummaryAll.total_requests) || 0);
+                const uncached = Number((this.usageSummary && this.usageSummary.total_requests) || 0);
+                const hits = all - uncached;
+                return Number.isFinite(hits) && hits > 0 ? hits : 0;
+            },
+
+            // Requests over the period and filters, scoped exactly like the
+            // request log below: cached rows count unless "Hide cached
+            // requests" is on.
+            usagePageTotalRequests() {
+                const summary = this.usageLogHideCached ? this.usageSummary : this.usageSummaryAll;
+                const requests = Number((summary && summary.total_requests) || 0);
+                return Number.isFinite(requests) ? requests : 0;
+            },
+
+            usagePageRequestsTitle() {
+                const hits = this.usagePageCacheHits();
+                if (hits <= 0) return '';
+                if (this.usageLogHideCached) {
+                    return this.formatNumber(hits) + ' cached requests hidden';
+                }
+                const provider = Number((this.usageSummary && this.usageSummary.total_requests) || 0);
+                return this.formatNumber(provider) + ' to providers + ' + this.formatNumber(hits) + ' from cache';
+            },
+
+            usagePageCostTitle() {
+                const summary = this.usageSummary || {};
+                if (summary.total_input_cost === null || summary.total_input_cost === undefined) return '';
+                return this.formatCost(summary.total_input_cost) + ' input + ' + this.formatCost(summary.total_output_cost) + ' output';
             },
 
             async fetchModelUsage() {
@@ -363,7 +529,7 @@
                     if (controller) {
                         options.signal = controller.signal;
                     }
-                    const res = await fetch('/admin/usage/models?' + this._usageQueryStr(), options);
+                    const res = await fetch('/admin/usage/models?' + this._usageQueryStr() + this._usageFilterQueryStr(), options);
                     const handled = this.handleFetchResponse(res, 'usage models', options);
                     if (typeof this.isStaleAuthFetchResult === 'function' && this.isStaleAuthFetchResult(handled)) {
                         return;
@@ -400,7 +566,7 @@
                     if (controller) {
                         options.signal = controller.signal;
                     }
-                    const res = await fetch('/admin/usage/user-paths?' + this._usageQueryStr(), options);
+                    const res = await fetch('/admin/usage/user-paths?' + this._usageQueryStr() + this._usageFilterQueryStr(), options);
                     const handled = this.handleFetchResponse(res, 'usage user paths', options);
                     if (typeof this.isStaleAuthFetchResult === 'function' && this.isStaleAuthFetchResult(handled)) {
                         return;
@@ -427,6 +593,43 @@
                 }
             },
 
+            async fetchLabelUsage() {
+                let controller = null;
+                try {
+                    controller = typeof this._startAbortableRequest === 'function'
+                        ? this._startAbortableRequest('_labelUsageFetchController')
+                        : null;
+                    const options = typeof this.requestOptions === 'function' ? this.requestOptions() : { headers: this.headers() };
+                    if (controller) {
+                        options.signal = controller.signal;
+                    }
+                    const res = await fetch('/admin/usage/labels?' + this._usageQueryStr() + this._usageFilterQueryStr(), options);
+                    const handled = this.handleFetchResponse(res, 'usage labels', options);
+                    if (typeof this.isStaleAuthFetchResult === 'function' && this.isStaleAuthFetchResult(handled)) {
+                        return;
+                    }
+                    if (!handled) {
+                        this.labelUsage = [];
+                        return;
+                    }
+                    const payload = await res.json();
+                    if (controller && controller.signal.aborted) {
+                        return;
+                    }
+                    this.labelUsage = Array.isArray(payload) ? payload : [];
+                } catch (e) {
+                    if (typeof this._isAbortError === 'function' && this._isAbortError(e)) {
+                        return;
+                    }
+                    console.error('Failed to fetch usage by label:', e);
+                    this.labelUsage = [];
+                } finally {
+                    if (typeof this._clearAbortableRequest === 'function') {
+                        this._clearAbortableRequest('_labelUsageFetchController', controller);
+                    }
+                }
+            },
+
             async fetchUsageLog(resetOffset) {
                 let controller = null;
                 try {
@@ -438,13 +641,10 @@
                         options.signal = controller.signal;
                     }
                     if (resetOffset) this.usageLog.offset = 0;
-                    let qs = this._usageQueryStr();
+                    let qs = this._usageQueryStr() + this._usageFilterQueryStr();
                     qs += '&limit=' + this.usageLog.limit + '&offset=' + this.usageLog.offset;
                     qs += '&cache_mode=' + (this.usageLogHideCached ? 'uncached' : 'all');
                     if (this.usageLogSearch) qs += '&search=' + encodeURIComponent(this.usageLogSearch);
-                    if (this.usageLogModel) qs += '&model=' + encodeURIComponent(this.usageLogModel);
-                    if (this.usageLogProvider) qs += '&provider=' + encodeURIComponent(this.usageLogProvider);
-                    if (this.usageLogUserPath) qs += '&user_path=' + encodeURIComponent(this.usageLogUserPath);
 
                     const res = await fetch('/admin/usage/log?' + qs, options);
                     const handled = this.handleFetchResponse(res, 'usage log', options);
@@ -483,6 +683,7 @@
                 history.pushState(null, '', dashboardModulePath(url));
                 this.renderBarChart();
                 this.renderUserPathChart();
+                this.renderLabelChart();
             },
 
             usageLogNextPage() {
@@ -499,23 +700,51 @@
                 }
             },
 
-            usageLogModelOptions() {
-                const set = new Set();
-                this.modelUsage.forEach((m) => { set.add(m.model); });
+            // Sorted, deduplicated choices for one facet dropdown. The active
+            // selection stays listed so the select never silently shows "All"
+            // while a filter is applied.
+            _usageFacetOptionList(kind, activeValue) {
+                const set = new Set((this.usageFacetOptions && this.usageFacetOptions[kind]) || []);
+                if (activeValue) set.add(activeValue);
                 return [...set].sort();
             },
 
-            usageLogProviderOptions() {
-                const set = new Set();
-                this.modelUsage.forEach((m) => {
-                    const provider = typeof this.providerDisplayValue === 'function'
-                        ? this.providerDisplayValue(m)
-                        : String((m && (m.provider_name || m.provider)) || '').trim();
-                    if (provider) {
-                        set.add(provider);
-                    }
-                });
-                return [...set].sort();
+            usageFilterModelOptions() {
+                return this._usageFacetOptionList('models', this.usageFilterModel);
+            },
+
+            usageFilterProviderOptions() {
+                return this._usageFacetOptionList('providers', this.usageFilterProvider);
+            },
+
+            usageFilterLabelOptions() {
+                return this._usageFacetOptionList('labels', this.usageFilterLabel);
+            },
+
+            entryLabels(entry) {
+                return Array.isArray(entry && entry.labels) ? entry.labels : [];
+            },
+
+            // The Labels column only appears when labels are in play: the
+            // period has by-label aggregates, a label filter is active, or the
+            // current log page carries labelled entries (e.g. cached-only
+            // labelled traffic, which the uncached-mode aggregates omit).
+            usageLogHasLabels() {
+                if ((this.labelUsage || []).length > 0 || this.usageFilterLabel) return true;
+                const entries = (this.usageLog && this.usageLog.entries) || [];
+                return entries.some((entry) => this.entryLabels(entry).length > 0);
+            },
+
+            // Chip click: filter the whole page by the label, or clear the
+            // filter when the chip's label is already active.
+            toggleUsageLabelFilter(label) {
+                this.usageFilterLabel = this.usageFilterLabel === label ? '' : label;
+                this.onUsageFilterChanged();
+            },
+
+            usageLabelChipTitle(label) {
+                if (this.usageFilterLabel === label) return 'Clear label filter';
+                return 'Filter usage by "' + label + '"';
             },
 
             usageEntryCacheType(entry) {
