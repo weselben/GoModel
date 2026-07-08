@@ -1,7 +1,6 @@
 package providers
 
 import (
-	"bytes"
 	"context"
 	"log/slog"
 	"net/http"
@@ -10,20 +9,6 @@ import (
 
 	"gomodel/internal/core"
 )
-
-// captureLogger swaps slog.Default for a buffer-backed logger during the test
-// and restores it when the test finishes. Returns the buffer so the test can
-// inspect emitted log records.
-func captureLogger(t *testing.T) *bytes.Buffer {
-	t.Helper()
-	buf := &bytes.Buffer{}
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	t.Cleanup(func() {
-		slog.SetDefault(prev)
-	})
-	return buf
-}
 
 func TestIsHeaderBlocked(t *testing.T) {
 	tests := []struct {
