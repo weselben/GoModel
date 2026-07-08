@@ -31,6 +31,61 @@ func TestNew_ReturnsProvider(t *testing.T) {
 	}
 }
 
+func TestChatCompletion_AppliesHeaderOverrides(t *testing.T) {
+	var gotHeaders http.Header
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHeaders = r.Header.Clone()
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{
+			"id": "chatcmpl-123",
+			"object": "chat.completion",
+			"created": 1677652288,
+			"model": "llama-3.3-70b-versatile",
+			"choices": [{"index": 0, "message": {"role": "assistant", "content": "Hello!"}, "finish_reason": "stop"}],
+			"usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+		}`))
+	}))
+	defer server.Close()
+
+	provider := New(providers.ProviderConfig{
+		APIKey:  "groq-key",
+		BaseURL: server.URL,
+	}, providers.ProviderOptions{
+		HeaderOverrides: providers.HeaderOverridesConfig{
+			CustomUpstreamHeaders: map[string]string{
+				"X-Custom-Header": "custom-value",
+			},
+		},
+		UserPathHeader: "X-Tenant-Path",
+	})
+
+	ctx := providers.WithPassthroughHeaders(context.Background(), http.Header{
+		"X-Tenant-Path": {"tenant/42"},
+		"X-User-Header": {"user-value"},
+	})
+
+	_, err := provider.ChatCompletion(ctx, &core.ChatRequest{
+		Model: "llama-3.3-70b-versatile",
+		Messages: []core.Message{
+			{Role: "user", Content: "Hello"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ChatCompletion() error = %v", err)
+	}
+
+	if got := gotHeaders.Get("X-Custom-Header"); got != "custom-value" {
+		t.Fatalf("X-Custom-Header = %q, want custom-value", got)
+	}
+	if got := gotHeaders.Get("X-Tenant-Path"); got != "" {
+		t.Fatalf("X-Tenant-Path = %q, want empty", got)
+	}
+	if got := gotHeaders.Get("X-User-Header"); got != "" {
+		t.Fatalf("X-User-Header = %q, want empty", got)
+	}
+}
+
 func TestChatCompletion(t *testing.T) {
 	tests := []struct {
 		name          string

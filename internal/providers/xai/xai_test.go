@@ -274,6 +274,233 @@ func TestStreamChatCompletion_ForwardsXGrokConvIDFromSnapshot(t *testing.T) {
 	}
 }
 
+func TestChatCompletion_AppliesHeaderOverrides(t *testing.T) {
+	var gotHeaders http.Header
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHeaders = r.Header.Clone()
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{
+			"id": "chatcmpl-123",
+			"object": "chat.completion",
+			"created": 1677652288,
+			"model": "grok-2",
+			"choices": [{"index": 0, "message": {"role": "assistant", "content": "Hello!"}, "finish_reason": "stop"}],
+			"usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+		}`))
+	}))
+	defer server.Close()
+
+	provider := New(providers.ProviderConfig{
+		APIKey:  "xai-key",
+		BaseURL: server.URL,
+	}, providers.ProviderOptions{
+		HeaderOverrides: providers.HeaderOverridesConfig{
+			CustomUpstreamHeaders: map[string]string{
+				"X-Custom-Header": "custom-value",
+			},
+		},
+		UserPathHeader: "X-Tenant-Path",
+	})
+
+	ctx := providers.WithPassthroughHeaders(context.Background(), http.Header{
+		"X-Tenant-Path": {"tenant/42"},
+		"X-User-Header": {"user-value"},
+	})
+
+	_, err := provider.ChatCompletion(ctx, &core.ChatRequest{
+		Model: "grok-2",
+		Messages: []core.Message{
+			{Role: "user", Content: "Hello"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ChatCompletion() error = %v", err)
+	}
+
+	if got := gotHeaders.Get("X-Custom-Header"); got != "custom-value" {
+		t.Fatalf("X-Custom-Header = %q, want custom-value", got)
+	}
+	if got := gotHeaders.Get("X-Tenant-Path"); got != "" {
+		t.Fatalf("X-Tenant-Path = %q, want empty", got)
+	}
+	if got := gotHeaders.Get("X-User-Header"); got != "" {
+		t.Fatalf("X-User-Header = %q, want empty", got)
+	}
+}
+
+func TestChatCompletion_AppliesHeaderOverridesAndGrokConvID(t *testing.T) {
+	var gotHeaders http.Header
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHeaders = r.Header.Clone()
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{
+			"id": "chatcmpl-123",
+			"object": "chat.completion",
+			"created": 1677652288,
+			"model": "grok-2",
+			"choices": [{"index": 0, "message": {"role": "assistant", "content": "Hello!"}, "finish_reason": "stop"}],
+			"usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+		}`))
+	}))
+	defer server.Close()
+
+	provider := New(providers.ProviderConfig{
+		APIKey:  "xai-key",
+		BaseURL: server.URL,
+	}, providers.ProviderOptions{
+		HeaderOverrides: providers.HeaderOverridesConfig{
+			CustomUpstreamHeaders: map[string]string{
+				"X-Custom-Header": "custom-value",
+			},
+		},
+		UserPathHeader: "X-Tenant-Path",
+	})
+
+	ctx := core.WithRequestSnapshot(context.Background(), core.NewRequestSnapshot(
+		http.MethodPost,
+		"/v1/chat/completions",
+		nil,
+		nil,
+		map[string][]string{"x-grok-conv-id": {"client-conv-123"}},
+		"application/json",
+		nil,
+		false,
+		"req-123",
+		nil,
+	))
+	ctx = providers.WithPassthroughHeaders(ctx, http.Header{
+		"X-Tenant-Path": {"tenant/42"},
+	})
+
+	_, err := provider.ChatCompletion(ctx, &core.ChatRequest{
+		Model: "grok-2",
+		Messages: []core.Message{
+			{Role: "user", Content: "Hello"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ChatCompletion() error = %v", err)
+	}
+
+	if got := gotHeaders.Get("X-Custom-Header"); got != "custom-value" {
+		t.Fatalf("X-Custom-Header = %q, want custom-value", got)
+	}
+	if got := gotHeaders.Get("X-Tenant-Path"); got != "" {
+		t.Fatalf("X-Tenant-Path = %q, want empty", got)
+	}
+	if got := gotHeaders.Get(grokConvIDHeader); got != "client-conv-123" {
+		t.Fatalf("%s = %q, want client-conv-123", grokConvIDHeader, got)
+	}
+}
+
+func TestChatCompletion_AutoWireRegression(t *testing.T) {
+	tests := []struct {
+		name           string
+		opts           providers.ProviderOptions
+		passthrough    http.Header
+		wantCustom     string
+		wantUserPath   string
+		wantUserHeader string
+	}{
+		{
+			name: "HeaderOverrides_reaches_wire",
+			opts: providers.ProviderOptions{
+				HeaderOverrides: providers.HeaderOverridesConfig{
+					CustomUpstreamHeaders: map[string]string{
+						"X-Custom-Header": "custom-value",
+					},
+				},
+			},
+			passthrough:    nil,
+			wantCustom:     "custom-value",
+			wantUserPath:   "",
+			wantUserHeader: "",
+		},
+		{
+			name: "UserPathHeader_blocked_when_passthrough_disabled",
+			opts: providers.ProviderOptions{
+				HeaderOverrides: providers.HeaderOverridesConfig{
+					CustomUpstreamHeaders: map[string]string{
+						"X-Custom-Header": "custom-value",
+					},
+				},
+				UserPathHeader: "X-Tenant-Path",
+			},
+			passthrough: http.Header{
+				"X-Tenant-Path": {"tenant/42"},
+				"X-User-Header": {"user-value"},
+			},
+			wantCustom:     "custom-value",
+			wantUserPath:   "",
+			wantUserHeader: "",
+		},
+		{
+			name: "No_options_default_behavior",
+			opts: providers.ProviderOptions{},
+			passthrough: http.Header{
+				"X-Tenant-Path": {"tenant/42"},
+			},
+			wantCustom:     "",
+			wantUserPath:   "",
+			wantUserHeader: "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotHeaders http.Header
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotHeaders = r.Header.Clone()
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{
+					"id": "chatcmpl-123",
+					"object": "chat.completion",
+					"created": 1677652288,
+					"model": "grok-2",
+					"choices": [{"index": 0, "message": {"role": "assistant", "content": "Hello!"}, "finish_reason": "stop"}],
+					"usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+				}`))
+			}))
+			defer server.Close()
+
+			provider := New(providers.ProviderConfig{
+				APIKey:  "xai-key",
+				BaseURL: server.URL,
+			}, tc.opts)
+
+			ctx := context.Background()
+			if tc.passthrough != nil {
+				ctx = providers.WithPassthroughHeaders(ctx, tc.passthrough)
+			}
+
+			_, err := provider.ChatCompletion(ctx, &core.ChatRequest{
+				Model: "grok-2",
+				Messages: []core.Message{
+					{Role: "user", Content: "Hello"},
+				},
+			})
+			if err != nil {
+				t.Fatalf("ChatCompletion() error = %v", err)
+			}
+
+			if tc.wantCustom != "" {
+				if got := gotHeaders.Get("X-Custom-Header"); got != tc.wantCustom {
+					t.Errorf("X-Custom-Header = %q, want %q", got, tc.wantCustom)
+				}
+			}
+			if got := gotHeaders.Get("X-Tenant-Path"); got != tc.wantUserPath {
+				t.Errorf("X-Tenant-Path = %q, want %q", got, tc.wantUserPath)
+			}
+			if got := gotHeaders.Get("X-User-Header"); got != tc.wantUserHeader {
+				t.Errorf("X-User-Header = %q, want %q", got, tc.wantUserHeader)
+			}
+		})
+	}
+}
+
 func TestChatCompletion(t *testing.T) {
 	tests := []struct {
 		name          string

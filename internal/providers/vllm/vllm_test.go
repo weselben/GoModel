@@ -10,6 +10,7 @@ import (
 
 	"gomodel/internal/core"
 	"gomodel/internal/llmclient"
+	"gomodel/internal/providers"
 )
 
 func TestChatCompletion_UsesOptionalBearerAuthAndChatEndpoint(t *testing.T) {
@@ -207,5 +208,79 @@ func TestPassthrough_UsesV1ForOpenAICompatibleEndpointsWhenBaseURLIncludesV1(t *
 
 	if gotPath != "/v1/chat/completions" {
 		t.Fatalf("path = %q, want /v1/chat/completions", gotPath)
+	}
+}
+
+func TestChatCompletion_AppliesHeaderOverrides(t *testing.T) {
+	var gotHeaders http.Header
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHeaders = r.Header.Clone()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"chatcmpl-vllm",
+			"created":1677652288,
+			"model":"meta-llama/Llama-3.1-8B-Instruct",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}]
+		}`))
+	}))
+	defer server.Close()
+
+	provider := New(providers.ProviderConfig{BaseURL: server.URL}, providers.ProviderOptions{
+		HeaderOverrides: providers.HeaderOverridesConfig{
+			CustomUpstreamHeaders: map[string]string{
+				"X-Custom-Header": "custom-value",
+			},
+		},
+	}).(*Provider)
+
+	_, err := provider.ChatCompletion(context.Background(), &core.ChatRequest{
+		Model: "meta-llama/Llama-3.1-8B-Instruct",
+		Messages: []core.Message{
+			{Role: "user", Content: "hi"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ChatCompletion() error = %v", err)
+	}
+
+	if gotHeaders.Get("X-Custom-Header") != "custom-value" {
+		t.Fatalf("X-Custom-Header = %q, want custom-value", gotHeaders.Get("X-Custom-Header"))
+	}
+}
+
+func TestPassthrough_AppliesHeaderOverrides(t *testing.T) {
+	var gotHeaders http.Header
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHeaders = r.Header.Clone()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"tokens":[1,2,3]}`))
+	}))
+	defer server.Close()
+
+	provider := New(providers.ProviderConfig{BaseURL: server.URL}, providers.ProviderOptions{
+		HeaderOverrides: providers.HeaderOverridesConfig{
+			CustomUpstreamHeaders: map[string]string{
+				"X-Custom-Header": "custom-value",
+			},
+		},
+	}).(*Provider)
+
+	ctx := providers.WithPassthroughHeaders(context.Background(), http.Header{
+		"Content-Type": []string{"application/json"},
+	})
+	resp, err := provider.Passthrough(ctx, &core.PassthroughRequest{
+		Method:   http.MethodPost,
+		Endpoint: "tokenize",
+		Body:     io.NopCloser(strings.NewReader("{}")),
+	})
+	if err != nil {
+		t.Fatalf("Passthrough() error = %v", err)
+	}
+	defer resp.Body.Close()
+
+	if gotHeaders.Get("X-Custom-Header") != "custom-value" {
+		t.Fatalf("X-Custom-Header = %q, want custom-value", gotHeaders.Get("X-Custom-Header"))
 	}
 }

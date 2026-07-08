@@ -1,6 +1,8 @@
 package providers
 
 import (
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -70,7 +72,10 @@ var testDiscoveryConfigs = map[string]DiscoveryConfig{
 
 func TestBuildProviderConfig_InheritsGlobal(t *testing.T) {
 	raw := config.RawProviderConfig{Type: "openai", APIKey: "sk-test"}
-	got := buildProviderConfig(raw, globalResilience)
+	got, err := buildProviderConfig(raw, globalResilience)
+	if err != nil {
+		t.Fatalf("buildProviderConfig() error = %v", err)
+	}
 
 	if got.Type != "openai" {
 		t.Errorf("Type = %q, want openai", got.Type)
@@ -82,7 +87,10 @@ func TestBuildProviderConfig_InheritsGlobal(t *testing.T) {
 
 func TestBuildProviderConfig_NilResilience(t *testing.T) {
 	raw := config.RawProviderConfig{Type: "openai", APIKey: "sk", Resilience: nil}
-	got := buildProviderConfig(raw, globalResilience)
+	got, err := buildProviderConfig(raw, globalResilience)
+	if err != nil {
+		t.Fatalf("buildProviderConfig() error = %v", err)
+	}
 
 	if got.Resilience.Retry != globalRetry {
 		t.Error("nil Resilience should inherit global")
@@ -95,7 +103,10 @@ func TestBuildProviderConfig_NilRetry(t *testing.T) {
 		APIKey:     "sk",
 		Resilience: &config.RawResilienceConfig{Retry: nil},
 	}
-	got := buildProviderConfig(raw, globalResilience)
+	got, err := buildProviderConfig(raw, globalResilience)
+	if err != nil {
+		t.Fatalf("buildProviderConfig() error = %v", err)
+	}
 
 	if got.Resilience.Retry != globalRetry {
 		t.Error("nil Retry should inherit global")
@@ -112,7 +123,10 @@ func TestBuildProviderConfig_PartialOverride(t *testing.T) {
 			},
 		},
 	}
-	got := buildProviderConfig(raw, globalResilience)
+	got, err := buildProviderConfig(raw, globalResilience)
+	if err != nil {
+		t.Fatalf("buildProviderConfig() error = %v", err)
+	}
 
 	if got.Resilience.Retry.MaxRetries != 10 {
 		t.Errorf("MaxRetries = %d, want 10", got.Resilience.Retry.MaxRetries)
@@ -139,7 +153,10 @@ func TestBuildProviderConfig_FullOverride(t *testing.T) {
 			},
 		},
 	}
-	got := buildProviderConfig(raw, globalResilience)
+	got, err := buildProviderConfig(raw, globalResilience)
+	if err != nil {
+		t.Fatalf("buildProviderConfig() error = %v", err)
+	}
 
 	r := got.Resilience.Retry
 	if r.MaxRetries != 7 {
@@ -169,7 +186,10 @@ func TestBuildProviderConfig_ZeroValueOverride(t *testing.T) {
 			},
 		},
 	}
-	got := buildProviderConfig(raw, globalResilience)
+	got, err := buildProviderConfig(raw, globalResilience)
+	if err != nil {
+		t.Fatalf("buildProviderConfig() error = %v", err)
+	}
 
 	if got.Resilience.Retry.MaxRetries != 0 {
 		t.Errorf("explicit 0 should override global (3), got %d", got.Resilience.Retry.MaxRetries)
@@ -190,7 +210,10 @@ func TestBuildProviderConfig_PreservesFields(t *testing.T) {
 		GCPScope:           "scope-a",
 		Models:             []config.RawProviderModel{{ID: "gpt-4"}, {ID: "gpt-3.5-turbo"}},
 	}
-	got := buildProviderConfig(raw, globalResilience)
+	got, err := buildProviderConfig(raw, globalResilience)
+	if err != nil {
+		t.Fatalf("buildProviderConfig() error = %v", err)
+	}
 
 	if got.APIKey != "sk-key" {
 		t.Errorf("APIKey = %q, want sk-key", got.APIKey)
@@ -233,7 +256,10 @@ func TestBuildProviderConfig_NormalizesLegacyGeminiVertexType(t *testing.T) {
 		VertexLocation: "us-central1",
 	}
 
-	got := buildProviderConfig(raw, globalResilience)
+	got, err := buildProviderConfig(raw, globalResilience)
+	if err != nil {
+		t.Fatalf("buildProviderConfig() error = %v", err)
+	}
 
 	if got.Type != "vertex" {
 		t.Fatalf("Type = %q, want vertex", got.Type)
@@ -258,7 +284,10 @@ func TestBuildProviderConfigs_MultipleProviders(t *testing.T) {
 		"anthropic": {Type: "anthropic", APIKey: "sk-ant"},
 	}
 
-	got := buildProviderConfigs(raw, globalResilience)
+	got, err := buildProviderConfigs(raw, globalResilience)
+	if err != nil {
+		t.Fatalf("buildProviderConfigs() error = %v", err)
+	}
 
 	if got["openai"].Resilience.Retry.MaxRetries != 10 {
 		t.Errorf("openai MaxRetries = %d, want 10", got["openai"].Resilience.Retry.MaxRetries)
@@ -269,7 +298,10 @@ func TestBuildProviderConfigs_MultipleProviders(t *testing.T) {
 }
 
 func TestBuildProviderConfigs_EmptyMap(t *testing.T) {
-	got := buildProviderConfigs(map[string]config.RawProviderConfig{}, globalResilience)
+	got, err := buildProviderConfigs(map[string]config.RawProviderConfig{}, globalResilience)
+	if err != nil {
+		t.Fatalf("buildProviderConfigs() error = %v", err)
+	}
 	if len(got) != 0 {
 		t.Errorf("expected empty result, got %d entries", len(got))
 	}
@@ -609,7 +641,10 @@ func TestResolveProviders_FiltersVertexWithoutProjectOrLocation(t *testing.T) {
 	t.Setenv("VERTEX_PROJECT", "prod-ai")
 	t.Setenv("VERTEX_AUTH_TYPE", "gcp_adc")
 
-	got, filteredRaw := resolveProviders(map[string]config.RawProviderConfig{}, globalResilience, testDiscoveryConfigs)
+	got, filteredRaw, err := resolveProviders(map[string]config.RawProviderConfig{}, globalResilience, testDiscoveryConfigs)
+	if err != nil {
+		t.Fatalf("resolveProviders() error = %v", err)
+	}
 
 	if _, exists := got["vertex"]; exists {
 		t.Fatal("expected vertex without location to be filtered")
@@ -623,7 +658,10 @@ func TestResolveProviders_KeepsVertexWithProjectAndLocationUsingDefaultADC(t *te
 	t.Setenv("VERTEX_PROJECT", "prod-ai")
 	t.Setenv("VERTEX_LOCATION", "us-central1")
 
-	got, filteredRaw := resolveProviders(map[string]config.RawProviderConfig{}, globalResilience, testDiscoveryConfigs)
+	got, filteredRaw, err := resolveProviders(map[string]config.RawProviderConfig{}, globalResilience, testDiscoveryConfigs)
+	if err != nil {
+		t.Fatalf("resolveProviders() error = %v", err)
+	}
 
 	p, exists := got["vertex"]
 	if !exists {
@@ -641,7 +679,10 @@ func TestResolveProviders_KeepsVertexWithBaseURLWithoutProjectLocation(t *testin
 	t.Setenv("VERTEX_BASE_URL", "https://proxy.example.com/v1/projects/prod-ai/locations/us-central1/publishers/google")
 	t.Setenv("VERTEX_AUTH_TYPE", "gcp_adc")
 
-	got, filteredRaw := resolveProviders(map[string]config.RawProviderConfig{}, globalResilience, testDiscoveryConfigs)
+	got, filteredRaw, err := resolveProviders(map[string]config.RawProviderConfig{}, globalResilience, testDiscoveryConfigs)
+	if err != nil {
+		t.Fatalf("resolveProviders() error = %v", err)
+	}
 
 	p, exists := got["vertex"]
 	if !exists {
@@ -663,7 +704,10 @@ func TestResolveProviders_FiltersVertexServiceAccountWithoutCredentials(t *testi
 	t.Setenv("VERTEX_LOCATION", "us-central1")
 	t.Setenv("VERTEX_AUTH_TYPE", "gcp_service_account")
 
-	got, filteredRaw := resolveProviders(map[string]config.RawProviderConfig{}, globalResilience, testDiscoveryConfigs)
+	got, filteredRaw, err := resolveProviders(map[string]config.RawProviderConfig{}, globalResilience, testDiscoveryConfigs)
+	if err != nil {
+		t.Fatalf("resolveProviders() error = %v", err)
+	}
 
 	if _, exists := got["vertex"]; exists {
 		t.Fatal("expected vertex service account provider without credentials to be filtered")
@@ -683,7 +727,10 @@ func TestResolveProviders_FiltersVertexWithUnresolvedProjectPlaceholder(t *testi
 		},
 	}
 
-	got, filteredRaw := resolveProviders(raw, globalResilience, testDiscoveryConfigs)
+	got, filteredRaw, err := resolveProviders(raw, globalResilience, testDiscoveryConfigs)
+	if err != nil {
+		t.Fatalf("resolveProviders() error = %v", err)
+	}
 
 	if _, exists := got["vertex"]; exists {
 		t.Fatal("expected vertex with unresolved project placeholder to be filtered")
@@ -704,7 +751,10 @@ func TestResolveProviders_FiltersVertexWithUnresolvedServiceAccountPlaceholder(t
 		},
 	}
 
-	got, filteredRaw := resolveProviders(raw, globalResilience, testDiscoveryConfigs)
+	got, filteredRaw, err := resolveProviders(raw, globalResilience, testDiscoveryConfigs)
+	if err != nil {
+		t.Fatalf("resolveProviders() error = %v", err)
+	}
 
 	if _, exists := got["vertex"]; exists {
 		t.Fatal("expected vertex with unresolved service account placeholder to be filtered")
@@ -1318,7 +1368,10 @@ func TestBuildProviderConfig_CircuitBreaker_InheritsGlobal(t *testing.T) {
 		Timeout:          30 * time.Second,
 	}
 	raw := config.RawProviderConfig{Type: "openai", APIKey: "sk"}
-	got := buildProviderConfig(raw, global)
+	got, err := buildProviderConfig(raw, global)
+	if err != nil {
+		t.Fatalf("buildProviderConfig() error = %v", err)
+	}
 
 	if got.Resilience.CircuitBreaker != global.CircuitBreaker {
 		t.Errorf("expected global circuit breaker to be inherited\ngot:  %+v\nwant: %+v",
@@ -1334,7 +1387,10 @@ func TestBuildProviderConfig_CircuitBreaker_NilOverride(t *testing.T) {
 		APIKey:     "sk",
 		Resilience: &config.RawResilienceConfig{CircuitBreaker: nil},
 	}
-	got := buildProviderConfig(raw, global)
+	got, err := buildProviderConfig(raw, global)
+	if err != nil {
+		t.Fatalf("buildProviderConfig() error = %v", err)
+	}
 
 	if got.Resilience.CircuitBreaker != global.CircuitBreaker {
 		t.Error("nil CircuitBreaker override should inherit global")
@@ -1355,7 +1411,10 @@ func TestBuildProviderConfig_CircuitBreaker_PartialOverride(t *testing.T) {
 			},
 		},
 	}
-	got := buildProviderConfig(raw, global)
+	got, err := buildProviderConfig(raw, global)
+	if err != nil {
+		t.Fatalf("buildProviderConfig() error = %v", err)
+	}
 
 	if got.Resilience.CircuitBreaker.FailureThreshold != 10 {
 		t.Errorf("FailureThreshold = %d, want 10", got.Resilience.CircuitBreaker.FailureThreshold)
@@ -1387,7 +1446,10 @@ func TestBuildProviderConfig_CircuitBreaker_FullOverride(t *testing.T) {
 			},
 		},
 	}
-	got := buildProviderConfig(raw, global)
+	got, err := buildProviderConfig(raw, global)
+	if err != nil {
+		t.Fatalf("buildProviderConfig() error = %v", err)
+	}
 
 	cb := got.Resilience.CircuitBreaker
 	if cb.FailureThreshold != 3 {
@@ -1415,7 +1477,10 @@ func TestBuildProviderConfig_CircuitBreaker_ZeroValueOverride(t *testing.T) {
 			},
 		},
 	}
-	got := buildProviderConfig(raw, global)
+	got, err := buildProviderConfig(raw, global)
+	if err != nil {
+		t.Fatalf("buildProviderConfig() error = %v", err)
+	}
 
 	if got.Resilience.CircuitBreaker.FailureThreshold != 0 {
 		t.Errorf("explicit 0 should override global, got %d", got.Resilience.CircuitBreaker.FailureThreshold)
@@ -1442,7 +1507,10 @@ func TestResolveProviders_EndToEnd(t *testing.T) {
 		},
 	}
 
-	got, filteredRaw := resolveProviders(raw, globalResilience, testDiscoveryConfigs)
+	got, filteredRaw, err := resolveProviders(raw, globalResilience, testDiscoveryConfigs)
+	if err != nil {
+		t.Fatalf("resolveProviders() error = %v", err)
+	}
 
 	if _, exists := got["bad"]; exists {
 		t.Error("expected provider with unresolved placeholder to be filtered out")
@@ -1470,7 +1538,10 @@ func TestResolveProviders_EndToEnd(t *testing.T) {
 func TestResolveProviders_EmptyRaw_OnlyEnvVars(t *testing.T) {
 	t.Setenv("GROQ_API_KEY", "sk-groq")
 
-	got, filteredRaw := resolveProviders(map[string]config.RawProviderConfig{}, globalResilience, testDiscoveryConfigs)
+	got, filteredRaw, err := resolveProviders(map[string]config.RawProviderConfig{}, globalResilience, testDiscoveryConfigs)
+	if err != nil {
+		t.Fatalf("resolveProviders() error = %v", err)
+	}
 
 	if got["groq"].APIKey != "sk-groq" {
 		t.Errorf("groq APIKey = %q, want sk-groq", got["groq"].APIKey)
@@ -1485,7 +1556,10 @@ func TestResolveProviders_EmptyRaw_SuffixedEnvVars(t *testing.T) {
 	t.Setenv("OPENAI_WEST_API_KEY", "sk-west")
 	t.Setenv("OPENAI_WEST_BASE_URL", "https://west.example.com/v1")
 
-	got, filteredRaw := resolveProviders(map[string]config.RawProviderConfig{}, globalResilience, testDiscoveryConfigs)
+	got, filteredRaw, err := resolveProviders(map[string]config.RawProviderConfig{}, globalResilience, testDiscoveryConfigs)
+	if err != nil {
+		t.Fatalf("resolveProviders() error = %v", err)
+	}
 
 	east, exists := got["openai-east"]
 	if !exists {
@@ -1533,7 +1607,10 @@ func TestResolveProviders_SingleCustomNamedProviderDoesNotDuplicateTypeKey(t *te
 		"openai_name": {Type: "openai"},
 	}
 
-	got, filteredRaw := resolveProviders(raw, globalResilience, testDiscoveryConfigs)
+	got, filteredRaw, err := resolveProviders(raw, globalResilience, testDiscoveryConfigs)
+	if err != nil {
+		t.Fatalf("resolveProviders() error = %v", err)
+	}
 
 	provider, exists := got["openai_name"]
 	if !exists {
@@ -1554,11 +1631,198 @@ func TestResolveProviders_SingleCustomNamedProviderDoesNotDuplicateTypeKey(t *te
 }
 
 func TestResolveProviders_NoProvidersNoEnvVars(t *testing.T) {
-	got, filteredRaw := resolveProviders(map[string]config.RawProviderConfig{}, globalResilience, testDiscoveryConfigs)
+	got, filteredRaw, err := resolveProviders(map[string]config.RawProviderConfig{}, globalResilience, testDiscoveryConfigs)
+	if err != nil {
+		t.Fatalf("resolveProviders() error = %v", err)
+	}
 	if len(got) != 0 {
 		t.Errorf("expected empty result, got %d entries", len(got))
 	}
 	if len(filteredRaw) != 0 {
 		t.Errorf("expected empty filtered raw, got %d entries", len(filteredRaw))
+	}
+}
+
+// --- header overrides: env overlay + validation ---
+
+func TestApplyProviderEnvVars_HeaderFieldsEnvWinsOverYAML(t *testing.T) {
+	raw := map[string]config.RawProviderConfig{
+		"openai": {
+			Type:                           "openai",
+			APIKey:                         "sk-yaml",
+			CustomUpstreamHeaders:          map[string]string{"X-From-YAML": "yaml"},
+			PassthroughUserHeaders:         false,
+			PassthroughUserHeadersSkip:     []string{"yaml-skip"},
+			PassthroughUserHeadersSkipMode: "skip",
+		},
+	}
+
+	t.Setenv("OPENAI_PASSTHROUGH_USER_HEADERS", "true")
+	t.Setenv("OPENAI_CUSTOM_UPSTREAM_HEADERS", "X-From-Env=env")
+	t.Setenv("OPENAI_PASSTHROUGH_USER_HEADERS_SKIP", "env-skip")
+	t.Setenv("OPENAI_PASSTHROUGH_USER_HEADERS_SKIP_MODE", "allow")
+
+	got := applyProviderEnvVars(raw, testDiscoveryConfigs)
+
+	p, exists := got["openai"]
+	if !exists {
+		t.Fatal("expected openai provider to remain after env overlay")
+	}
+	if !p.PassthroughUserHeaders {
+		t.Errorf("PassthroughUserHeaders = false, want true")
+	}
+	if got, want := p.CustomUpstreamHeaders, map[string]string{"X-From-Env": "env"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("CustomUpstreamHeaders = %v, want %v", got, want)
+	}
+	if got, want := p.PassthroughUserHeadersSkip, []string{"env-skip"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("PassthroughUserHeadersSkip = %v, want %v", got, want)
+	}
+	if got, want := p.PassthroughUserHeadersSkipMode, "allow"; got != want {
+		t.Errorf("PassthroughUserHeadersSkipMode = %q, want %q", got, want)
+	}
+}
+
+func TestApplyProviderEnvVars_PassthroughUserHeadersBidirectional(t *testing.T) {
+	tests := []struct {
+		name        string
+		yamlEnabled bool
+		envValue    string
+		wantEnabled bool
+	}{
+		{"env true overrides yaml false", false, "true", true},
+		{"env false overrides yaml true", true, "false", false},
+		{"env 0 overrides yaml true", true, "0", false},
+		{"env no overrides yaml true", true, "no", false},
+		{"env 1 overrides yaml false", false, "1", true},
+		{"env yes overrides yaml false", false, "yes", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw := map[string]config.RawProviderConfig{
+				"openai": {
+					Type:                   "openai",
+					APIKey:                 "sk-yaml",
+					PassthroughUserHeaders: tt.yamlEnabled,
+				},
+			}
+
+			t.Setenv("OPENAI_PASSTHROUGH_USER_HEADERS", tt.envValue)
+
+			got := applyProviderEnvVars(raw, testDiscoveryConfigs)
+			p, exists := got["openai"]
+			if !exists {
+				t.Fatal("expected openai provider to remain after env overlay")
+			}
+			if p.PassthroughUserHeaders != tt.wantEnabled {
+				t.Errorf("PassthroughUserHeaders = %v, want %v", p.PassthroughUserHeaders, tt.wantEnabled)
+			}
+		})
+	}
+}
+
+func TestBuildProviderConfig_InvalidPassthroughSkipMode(t *testing.T) {
+	raw := config.RawProviderConfig{
+		Type:                           "openai",
+		APIKey:                         "sk-test",
+		PassthroughUserHeadersSkipMode: "invalid",
+	}
+
+	_, err := buildProviderConfig(raw, globalResilience)
+	if err == nil {
+		t.Fatal("expected buildProviderConfig to fail for invalid passthrough skip mode")
+	}
+	if !strings.Contains(err.Error(), "invalid passthrough_user_headers_skip_mode") {
+		t.Errorf("error = %v, want invalid passthrough_user_headers_skip_mode", err)
+	}
+}
+
+func TestBuildProviderConfig_ValidPassthroughSkipModes(t *testing.T) {
+	for _, mode := range []string{"", "skip", "allow"} {
+		t.Run("mode="+mode, func(t *testing.T) {
+			raw := config.RawProviderConfig{
+				Type:                           "openai",
+				APIKey:                         "sk-test",
+				PassthroughUserHeadersSkipMode: mode,
+			}
+
+			cfg, err := buildProviderConfig(raw, globalResilience)
+			if err != nil {
+				t.Fatalf("buildProviderConfig failed for mode %q: %v", mode, err)
+			}
+			if got, want := cfg.HeaderOverrides.SkipMode, mode; got != want {
+				t.Errorf("SkipMode = %q, want %q", got, want)
+			}
+		})
+	}
+}
+func TestApplyProviderEnvVars_CommaSeparatedHeaderParsing(t *testing.T) {
+	raw := map[string]config.RawProviderConfig{
+		"openai": {
+			Type:   "openai",
+			APIKey: "sk-yaml",
+		},
+	}
+
+	t.Setenv("OPENAI_CUSTOM_UPSTREAM_HEADERS", "X-Title=MyApp, User-Agent=MyApp/1.0.0")
+	t.Setenv("OPENAI_PASSTHROUGH_USER_HEADERS_SKIP", "X-Internal-Trace, X-Debug")
+
+	got := applyProviderEnvVars(raw, testDiscoveryConfigs)
+
+	p, exists := got["openai"]
+	if !exists {
+		t.Fatal("expected openai provider to remain after env overlay")
+	}
+
+	if got, want := p.CustomUpstreamHeaders, map[string]string{"X-Title": "MyApp", "User-Agent": "MyApp/1.0.0"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("CustomUpstreamHeaders = %v, want %v", got, want)
+	}
+	if got, want := p.PassthroughUserHeadersSkip, []string{"X-Internal-Trace", "X-Debug"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("PassthroughUserHeadersSkip = %v, want %v", got, want)
+	}
+}
+
+func TestApplyProviderEnvVars_CommaSeparatedHeaderParsingWithWhitespace(t *testing.T) {
+	raw := map[string]config.RawProviderConfig{
+		"openai": {
+			Type:   "openai",
+			APIKey: "sk-yaml",
+		},
+	}
+
+	// Extra whitespace around entries — should be trimmed
+	t.Setenv("OPENAI_CUSTOM_UPSTREAM_HEADERS", "  X-Title=MyApp ,  User-Agent=MyApp/1.0.0  ")
+	t.Setenv("OPENAI_PASSTHROUGH_USER_HEADERS_SKIP", "  X-Internal-Trace , X-Debug  ")
+
+	got := applyProviderEnvVars(raw, testDiscoveryConfigs)
+
+	p, exists := got["openai"]
+	if !exists {
+		t.Fatal("expected openai provider to remain after env overlay")
+	}
+
+	if got, want := p.CustomUpstreamHeaders, map[string]string{"X-Title": "MyApp", "User-Agent": "MyApp/1.0.0"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("CustomUpstreamHeaders = %v, want %v", got, want)
+	}
+	if got, want := p.PassthroughUserHeadersSkip, []string{"X-Internal-Trace", "X-Debug"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("PassthroughUserHeadersSkip = %v, want %v", got, want)
+	}
+}
+
+func TestResolveProviders_InvalidPassthroughSkipMode(t *testing.T) {
+	raw := map[string]config.RawProviderConfig{
+		"openai": {
+			Type:                           "openai",
+			APIKey:                         "sk-test",
+			PassthroughUserHeadersSkipMode: "invalid",
+		},
+	}
+
+	_, _, err := resolveProviders(raw, globalResilience, testDiscoveryConfigs)
+	if err == nil {
+		t.Fatal("expected resolveProviders to fail for invalid passthrough skip mode")
+	}
+	if !strings.Contains(err.Error(), "provider \"openai\"") || !strings.Contains(err.Error(), "invalid passthrough_user_headers_skip_mode") {
+		t.Errorf("error = %v, want provider openai invalid passthrough_user_headers_skip_mode error", err)
 	}
 }

@@ -11,6 +11,7 @@ import (
 
 	"gomodel/internal/core"
 	"gomodel/internal/llmclient"
+	"gomodel/internal/providers"
 )
 
 func TestChatCompletion_UsesBearerAuthAndChatEndpoint(t *testing.T) {
@@ -410,5 +411,94 @@ func TestEmbeddings_ReturnsUnsupported(t *testing.T) {
 	_, err := provider.Embeddings(context.Background(), &core.EmbeddingRequest{Model: "embedding-model", Input: "hi"})
 	if err == nil {
 		t.Fatal("expected unsupported embeddings error, got nil")
+	}
+}
+
+// TestProviderOptions_AutoWireHeaders verifies that HeaderOverrides and
+// UserPathHeader from providers.ProviderOptions are auto-wired into the wire
+// headers via NewCompatibleProvider (compatible_provider.go:88-89).
+// Regression test: removing the auto-wire causes this test to fail.
+func TestProviderOptions_AutoWireHeaders(t *testing.T) {
+	t.Parallel()
+
+	type headerCase struct {
+		name           string
+		opts           providers.ProviderOptions
+		wantHeader     string
+		wantValue      string
+		passthroughCtx context.Context
+	}
+
+	cases := []headerCase{
+		{
+			name: "HeaderOverrides.CustomUpstreamHeaders reaches wire",
+			opts: providers.ProviderOptions{
+				HeaderOverrides: providers.HeaderOverridesConfig{
+					CustomUpstreamHeaders: map[string]string{
+						"X-Custom-Header": "custom-value",
+					},
+				},
+			},
+			wantHeader: "X-Custom-Header",
+			wantValue:  "custom-value",
+		},
+		{
+			name: "UserPathHeader blocks its alias from passthrough",
+			opts: providers.ProviderOptions{
+				HeaderOverrides: providers.HeaderOverridesConfig{
+					PassthroughUserHeaders: true,
+				},
+				UserPathHeader: "X-Tenant-Path",
+			},
+			wantHeader: "X-Tenant-Path",
+			wantValue:  "",
+			passthroughCtx: providers.WithPassthroughHeaders(context.Background(), http.Header{
+				"X-Tenant-Path": {"should-be-blocked"},
+			}),
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var gotHeaders http.Header
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotHeaders = r.Header.Clone()
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{
+					"id":"chatcmpl-deepseek",
+					"created":1677652288,
+					"model":"deepseek-v4-pro",
+					"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]
+				}`))
+			}))
+			defer server.Close()
+
+			provider := New(providers.ProviderConfig{
+				APIKey:  "deepseek-key",
+				BaseURL: server.URL,
+			}, tc.opts)
+
+			ctx := tc.passthroughCtx
+			if ctx == nil {
+				ctx = context.Background()
+			}
+
+			_, err := provider.ChatCompletion(ctx, &core.ChatRequest{
+				Model: "deepseek-v4-pro",
+				Messages: []core.Message{
+					{Role: "user", Content: "hi"},
+				},
+			})
+			if err != nil {
+				t.Fatalf("ChatCompletion() error = %v", err)
+			}
+
+			if got := gotHeaders.Get(tc.wantHeader); got != tc.wantValue {
+				t.Errorf("header %q = %q, want %q", tc.wantHeader, got, tc.wantValue)
+			}
+		})
 	}
 }

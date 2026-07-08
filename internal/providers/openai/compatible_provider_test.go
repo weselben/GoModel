@@ -10,6 +10,7 @@ import (
 
 	"gomodel/internal/core"
 	"gomodel/internal/llmclient"
+	"gomodel/internal/providers"
 )
 
 func TestCompatibleProvider_ListModels_ReturnsUpstreamOnSuccess(t *testing.T) {
@@ -231,5 +232,89 @@ func TestCompatibleProvider_ChatRequestHeaders_AppliedToChatOnly(t *testing.T) {
 		if got != "" {
 			t.Fatalf("models X-Conv-Id = %q, want empty", got)
 		}
+	}
+}
+
+func TestCompatibleProvider_buildHeaderMutator_AppliesSetHeadersAndOverrides(t *testing.T) {
+	var seenHeaders http.Header
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenHeaders = r.Header.Clone()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"object":"list","data":[]}`))
+	}))
+	defer server.Close()
+
+	provider := NewCompatibleProviderWithHTTPClient(
+		"test-key",
+		server.Client(),
+		llmclient.Hooks{},
+		CompatibleProviderConfig{
+			ProviderName: "mutator-test",
+			BaseURL:      server.URL,
+			SetHeaders: func(req *http.Request, apiKey string) {
+				req.Header.Set("Authorization", "Bearer "+apiKey)
+				req.Header.Set("X-Provider-Static", "from-set-headers")
+			},
+			HeaderOverrides: providers.HeaderOverridesConfig{
+				CustomUpstreamHeaders: map[string]string{
+					"X-Custom-Override": "from-overrides",
+				},
+			},
+			UserPathAlias: "x-tenant-path",
+		},
+	)
+
+	if _, err := provider.ListModels(context.Background()); err != nil {
+		t.Fatalf("ListModels() error = %v", err)
+	}
+
+	if got := seenHeaders.Get("Authorization"); got != "Bearer test-key" {
+		t.Fatalf("Authorization = %q, want Bearer test-key", got)
+	}
+	if got := seenHeaders.Get("X-Provider-Static"); got != "from-set-headers" {
+		t.Fatalf("X-Provider-Static = %q, want from-set-headers", got)
+	}
+	if got := seenHeaders.Get("X-Custom-Override"); got != "from-overrides" {
+		t.Fatalf("X-Custom-Override = %q, want from-overrides", got)
+	}
+}
+
+func TestCompatibleProvider_NewCompatibleProvider_PropagatesOverridesFromOpts(t *testing.T) {
+	var seenHeaders http.Header
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenHeaders = r.Header.Clone()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"object":"list","data":[]}`))
+	}))
+	defer server.Close()
+
+	provider := NewCompatibleProvider(
+		"test-key",
+		providers.ProviderOptions{
+			UserPathHeader: "x-tenant-path",
+			HeaderOverrides: providers.HeaderOverridesConfig{
+				CustomUpstreamHeaders: map[string]string{
+					"X-Custom-Override": "from-opts",
+				},
+			},
+		},
+		CompatibleProviderConfig{
+			ProviderName: "opts-propagate-test",
+			BaseURL:      server.URL,
+			SetHeaders: func(req *http.Request, apiKey string) {
+				req.Header.Set("Authorization", "Bearer "+apiKey)
+			},
+		},
+	)
+
+	if _, err := provider.ListModels(context.Background()); err != nil {
+		t.Fatalf("ListModels() error = %v", err)
+	}
+
+	if got := seenHeaders.Get("Authorization"); got != "Bearer test-key" {
+		t.Fatalf("Authorization = %q, want Bearer test-key", got)
+	}
+	if got := seenHeaders.Get("X-Custom-Override"); got != "from-opts" {
+		t.Fatalf("X-Custom-Override = %q, want from-opts", got)
 	}
 }

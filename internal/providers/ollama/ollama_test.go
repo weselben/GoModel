@@ -15,6 +15,92 @@ import (
 	"gomodel/internal/providers"
 )
 
+// TestHeaderOverrides_AppliedOnV1Only verifies that provider-configured header
+// overrides reach the OpenAI-compatible /v1 chat surface through the
+// CompatibleProvider, but are not forwarded to the native /api/embed surface.
+func TestHeaderOverrides_AppliedOnV1Only(t *testing.T) {
+	var v1Headers, nativeHeaders http.Header
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/chat/completions":
+			v1Headers = r.Header.Clone()
+		case "/api/embed":
+			nativeHeaders = r.Header.Clone()
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+
+		w.WriteHeader(http.StatusOK)
+		if r.URL.Path == "/api/embed" {
+			_, _ = w.Write([]byte(`{"model":"nomic-embed-text","embeddings":[[0.1]],"prompt_eval_count":1}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-123","object":"chat.completion","created":1677652288,"model":"llama3.2","choices":[{"index":0,"message":{"role":"assistant","content":"Hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+	}))
+	defer server.Close()
+
+	provider := New(providers.ProviderConfig{APIKey: "test-key"}, providers.ProviderOptions{
+		HeaderOverrides: providers.HeaderOverridesConfig{
+			CustomUpstreamHeaders: map[string]string{
+				"X-Custom-Upstream": "ollama-value",
+			},
+			PassthroughUserHeaders: true,
+			SkipHeaders:            []string{"X-User-Custom"},
+			SkipMode:               "skip",
+		},
+		UserPathHeader: "x-tenant-id",
+	})
+	p, ok := provider.(*Provider)
+	if !ok {
+		t.Fatalf("New did not return *Provider, got %T", provider)
+	}
+	// Set the /v1 compatible surface to the test server; native client derived
+	// from the same URL will hit the server root.
+	p.SetBaseURL(server.URL + "/v1")
+
+	// Chat request goes to /v1/chat/completions and should carry the override.
+	ctx := providers.WithPassthroughHeaders(context.Background(), http.Header{
+		http.CanonicalHeaderKey("X-User-Custom"): []string{"user-value"},
+	})
+	_, err := p.ChatCompletion(ctx, &core.ChatRequest{
+		Model:    "llama3.2",
+		Messages: []core.Message{{Role: "user", Content: "Hello"}},
+	})
+	if err != nil {
+		t.Fatalf("ChatCompletion unexpected error: %v", err)
+	}
+
+	if got := v1Headers.Get("X-Custom-Upstream"); got != "ollama-value" {
+		t.Errorf("/v1 X-Custom-Upstream = %q, want %q", got, "ollama-value")
+	}
+	if got := v1Headers.Get("X-User-Custom"); got != "" {
+		t.Errorf("/v1 skipped passthrough header should not be present, got %q", got)
+	}
+	if got := v1Headers.Get("X-Tenant-Id"); got != "" {
+		t.Errorf("/v1 user-path alias should not be set without a request user-path, got %q", got)
+	}
+
+	// Embedding request goes to /api/embed and must NOT carry overrides.
+	_, err = p.Embeddings(context.Background(), &core.EmbeddingRequest{
+		Model: "nomic-embed-text",
+		Input: "hello",
+	})
+	if err != nil {
+		t.Fatalf("Embeddings unexpected error: %v", err)
+	}
+
+	if got := nativeHeaders.Get("X-Custom-Upstream"); got != "" {
+		t.Errorf("native /api/embed X-Custom-Upstream = %q, want empty", got)
+	}
+	if got := nativeHeaders.Get("X-User-Custom"); got != "" {
+		t.Errorf("native /api/embed X-User-Custom = %q, want empty", got)
+	}
+	if got := nativeHeaders.Get("Authorization"); got != "Bearer test-key" {
+		t.Errorf("native /api/embed Authorization = %q, want %q", got, "Bearer test-key")
+	}
+}
+
 func TestNew(t *testing.T) {
 	apiKey := "test-api-key"
 	// Use NewWithHTTPClient to get concrete type for internal testing

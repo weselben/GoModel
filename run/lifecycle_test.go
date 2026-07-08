@@ -3,13 +3,46 @@ package run
 import (
 	"context"
 	"errors"
+	"io"
 	"sync"
 	"testing"
 	"time"
 
 	"gomodel/config"
+	"gomodel/internal/core"
 	"gomodel/internal/providers"
 )
+
+// capturedProvider is a test double that records ProviderOptions passed to its
+// constructor so wiring assertions can observe values that would otherwise be
+// buried inside provider implementations.
+type capturedProvider struct {
+	userPathHeader string
+}
+
+func (c *capturedProvider) ChatCompletion(_ context.Context, _ *core.ChatRequest) (*core.ChatResponse, error) {
+	return nil, nil
+}
+
+func (c *capturedProvider) StreamChatCompletion(_ context.Context, _ *core.ChatRequest) (io.ReadCloser, error) {
+	return nil, nil
+}
+
+func (c *capturedProvider) ListModels(_ context.Context) (*core.ModelsResponse, error) {
+	return nil, nil
+}
+
+func (c *capturedProvider) Responses(_ context.Context, _ *core.ResponsesRequest) (*core.ResponsesResponse, error) {
+	return nil, nil
+}
+
+func (c *capturedProvider) StreamResponses(_ context.Context, _ *core.ResponsesRequest) (io.ReadCloser, error) {
+	return nil, nil
+}
+
+func (c *capturedProvider) Embeddings(_ context.Context, _ *core.EmbeddingRequest) (*core.EmbeddingResponse, error) {
+	return nil, nil
+}
 
 type stubLifecycleApp struct {
 	mu            sync.Mutex
@@ -167,5 +200,31 @@ func TestMain_KimicodeProviderRegistration(t *testing.T) {
 	}
 	if provider == nil {
 		t.Fatal("factory.Create(kimicode) returned nil provider")
+	}
+}
+
+func TestMain_SetUserPathHeaderWiring(t *testing.T) {
+	factory := providers.NewProviderFactory()
+	factory.SetUserPathHeader("X-Tenant")
+
+	var captured *capturedProvider
+	factory.Add(providers.Registration{
+		Type: "captured",
+		New: func(cfg providers.ProviderConfig, opts providers.ProviderOptions) core.Provider {
+			p := &capturedProvider{userPathHeader: opts.UserPathHeader}
+			captured = p
+			return p
+		},
+	})
+
+	_, err := factory.Create(providers.ProviderConfig{Type: "captured"})
+	if err != nil {
+		t.Fatalf("factory.Create() error = %v", err)
+	}
+	if captured == nil {
+		t.Fatal("provider constructor was not called")
+	}
+	if captured.userPathHeader != "X-Tenant" {
+		t.Fatalf("UserPathHeader = %q, want X-Tenant", captured.userPathHeader)
 	}
 }

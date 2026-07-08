@@ -413,3 +413,132 @@ func TestProviderFactory_Create_PassesConfiguredModels(t *testing.T) {
 		t.Fatalf("receivedOpts.Models = %v, want [model-a model-b]", receivedOpts.Models)
 	}
 }
+
+func TestProviderFactory_Create_PassesHeaderOverrides(t *testing.T) {
+	factory := NewProviderFactory()
+
+	var receivedOpts ProviderOptions
+	factory.Add(Registration{
+		Type: "test",
+		New: func(cfg ProviderConfig, opts ProviderOptions) core.Provider {
+			receivedOpts = opts
+			return &factoryMockProvider{}
+		},
+	})
+
+	headerOverrides := HeaderOverridesConfig{
+		CustomUpstreamHeaders:  map[string]string{"X-Custom": "value"},
+		PassthroughUserHeaders: true,
+		SkipHeaders:            []string{"X-Skip"},
+		SkipMode:               "skip",
+	}
+	cfg := ProviderConfig{
+		Type:            "test",
+		APIKey:          "test-key",
+		HeaderOverrides: headerOverrides,
+	}
+
+	_, err := factory.Create(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(receivedOpts.HeaderOverrides.CustomUpstreamHeaders) != 1 || receivedOpts.HeaderOverrides.CustomUpstreamHeaders["X-Custom"] != "value" {
+		t.Fatalf("HeaderOverrides.CustomUpstreamHeaders = %v, want map[X-Custom:value]", receivedOpts.HeaderOverrides.CustomUpstreamHeaders)
+	}
+	if !receivedOpts.HeaderOverrides.PassthroughUserHeaders {
+		t.Error("expected HeaderOverrides.PassthroughUserHeaders to be true")
+	}
+	if len(receivedOpts.HeaderOverrides.SkipHeaders) != 1 || receivedOpts.HeaderOverrides.SkipHeaders[0] != "X-Skip" {
+		t.Fatalf("HeaderOverrides.SkipHeaders = %v, want [X-Skip]", receivedOpts.HeaderOverrides.SkipHeaders)
+	}
+	if receivedOpts.HeaderOverrides.SkipMode != "skip" {
+		t.Fatalf("HeaderOverrides.SkipMode = %q, want skip", receivedOpts.HeaderOverrides.SkipMode)
+	}
+}
+
+func TestProviderFactory_SetUserPathHeader_PassedToBuilder(t *testing.T) {
+	factory := NewProviderFactory()
+	factory.SetUserPathHeader("x-tenant-path")
+
+	var receivedOpts ProviderOptions
+	factory.Add(Registration{
+		Type: "test",
+		New: func(cfg ProviderConfig, opts ProviderOptions) core.Provider {
+			receivedOpts = opts
+			return &factoryMockProvider{}
+		},
+	})
+
+	cfg := ProviderConfig{
+		Type:   "test",
+		APIKey: "test-key",
+	}
+
+	_, err := factory.Create(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	want := core.UserPathHeaderName("x-tenant-path")
+	if receivedOpts.UserPathHeader != want {
+		t.Fatalf("UserPathHeader = %q, want %q", receivedOpts.UserPathHeader, want)
+	}
+}
+
+func TestProviderFactory_Create_UserPathAliasOverridesFactoryDefault(t *testing.T) {
+	factory := NewProviderFactory()
+	factory.SetUserPathHeader("x-tenant-path")
+
+	var receivedOpts ProviderOptions
+	factory.Add(Registration{
+		Type: "test",
+		New: func(cfg ProviderConfig, opts ProviderOptions) core.Provider {
+			receivedOpts = opts
+			return &factoryMockProvider{}
+		},
+	})
+
+	cfg := ProviderConfig{
+		Type:          "test",
+		APIKey:        "test-key",
+		UserPathAlias: "x-provider-alias",
+	}
+
+	_, err := factory.Create(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	want := core.UserPathHeaderName("x-provider-alias")
+	if receivedOpts.UserPathHeader != want {
+		t.Fatalf("UserPathHeader = %q, want %q", receivedOpts.UserPathHeader, want)
+	}
+}
+
+func TestProviderFactory_Create_DefaultUserPathHeaderWhenUnset(t *testing.T) {
+	factory := NewProviderFactory()
+
+	var receivedOpts ProviderOptions
+	factory.Add(Registration{
+		Type: "test",
+		New: func(cfg ProviderConfig, opts ProviderOptions) core.Provider {
+			receivedOpts = opts
+			return &factoryMockProvider{}
+		},
+	})
+
+	cfg := ProviderConfig{
+		Type:   "test",
+		APIKey: "test-key",
+	}
+
+	_, err := factory.Create(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if receivedOpts.UserPathHeader != "" {
+		t.Fatalf("UserPathHeader = %q, want empty when unset", receivedOpts.UserPathHeader)
+	}
+}

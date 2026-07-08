@@ -289,9 +289,12 @@ func TestInitializeProviders_UnavailableProviderCanRefreshLater(t *testing.T) {
 	})
 
 	registry := NewModelRegistry()
-	count, err := initializeProviders(ctx, map[string]ProviderConfig{
+	count, anyPassthrough, err := initializeProviders(ctx, map[string]ProviderConfig{
 		"test": {Type: "test", APIKey: "sk-test"},
 	}, factory, registry)
+	if anyPassthrough {
+		t.Fatal("initializeProviders() anyPassthrough = true, want false")
+	}
 	if err != nil {
 		t.Fatalf("initializeProviders() error = %v, want nil", err)
 	}
@@ -340,9 +343,12 @@ func TestInitializeProviders_AvailabilityCheckUsesCallerContext(t *testing.T) {
 	})
 
 	registry := NewModelRegistry()
-	count, err := initializeProviders(ctx, map[string]ProviderConfig{
+	count, anyPassthrough, err := initializeProviders(ctx, map[string]ProviderConfig{
 		"test": {Type: "test", APIKey: "sk-test"},
 	}, factory, registry)
+	if anyPassthrough {
+		t.Fatal("initializeProviders() anyPassthrough = true, want false")
+	}
 	if err != nil {
 		t.Fatalf("initializeProviders() error = %v, want nil", err)
 	}
@@ -351,5 +357,58 @@ func TestInitializeProviders_AvailabilityCheckUsesCallerContext(t *testing.T) {
 	}
 	if !errors.Is(checkErr, context.Canceled) {
 		t.Fatalf("CheckAvailability() context error = %v, want %v", checkErr, context.Canceled)
+	}
+}
+
+func TestInitializeProviders_AnyPassthroughUserHeaders(t *testing.T) {
+	ctx := t.Context()
+
+	factory := NewProviderFactory()
+	factory.Add(Registration{
+		Type: "test",
+		New: func(ProviderConfig, ProviderOptions) core.Provider {
+			return &initTestProvider{}
+		},
+	})
+
+	registry := NewModelRegistry()
+	count, anyPassthrough, err := initializeProviders(ctx, map[string]ProviderConfig{
+		"enabled": {
+			Type:            "test",
+			APIKey:          "sk-test",
+			HeaderOverrides: HeaderOverridesConfig{PassthroughUserHeaders: true},
+		},
+		"disabled": {
+			Type:            "test",
+			APIKey:          "sk-test",
+			HeaderOverrides: HeaderOverridesConfig{PassthroughUserHeaders: false},
+		},
+	}, factory, registry)
+	if err != nil {
+		t.Fatalf("initializeProviders() error = %v, want nil", err)
+	}
+	if count != 2 {
+		t.Fatalf("initializeProviders() count = %d, want 2", count)
+	}
+	if !anyPassthrough {
+		t.Fatal("initializeProviders() anyPassthrough = false, want true")
+	}
+
+	registry2 := NewModelRegistry()
+	count2, anyPassthrough2, err2 := initializeProviders(ctx, map[string]ProviderConfig{
+		"disabled": {
+			Type:            "test",
+			APIKey:          "sk-test",
+			HeaderOverrides: HeaderOverridesConfig{PassthroughUserHeaders: false},
+		},
+	}, factory, registry2)
+	if err2 != nil {
+		t.Fatalf("initializeProviders() error = %v, want nil", err2)
+	}
+	if count2 != 1 {
+		t.Fatalf("initializeProviders() count = %d, want 1", count2)
+	}
+	if anyPassthrough2 {
+		t.Fatal("initializeProviders() anyPassthrough = true, want false")
 	}
 }

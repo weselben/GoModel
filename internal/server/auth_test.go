@@ -296,7 +296,7 @@ func TestAuthMiddlewareWithAuthenticator_ManagedKeyUserPathOverridesHeader(t *te
 		return c.String(http.StatusOK, "ok")
 	}
 
-	handler := RequestSnapshotCapture()(AuthMiddlewareWithAuthenticator("", mockAuthenticator{
+	handler := RequestSnapshotCapture("", false)(AuthMiddlewareWithAuthenticator("", mockAuthenticator{
 		enabled:   true,
 		tokenToID: map[string]string{"sk_gom_token": "key-123"},
 		tokenPath: map[string]string{"sk_gom_token": "/team/auth-key"},
@@ -338,7 +338,7 @@ func TestAuthMiddlewareWithAuthenticator_ManagedKeyUserPathUsesConfiguredHeader(
 		return c.String(http.StatusOK, "ok")
 	}
 
-	handler := RequestSnapshotCapture(headerName)(AuthMiddlewareWithAuthenticator("", mockAuthenticator{
+	handler := RequestSnapshotCapture(headerName, false)(AuthMiddlewareWithAuthenticator("", mockAuthenticator{
 		enabled:   true,
 		tokenToID: map[string]string{"sk_gom_token": "key-123"},
 		tokenPath: map[string]string{"sk_gom_token": "/team/auth-key"},
