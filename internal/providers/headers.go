@@ -106,9 +106,11 @@ func ApplyHeaderOverrides(req *http.Request, cfg HeaderOverridesConfig, userPath
 // overlapping names. Still sends both; passthrough wins on conflict.
 func logStaticOverridden(req *http.Request, cfg HeaderOverridesConfig) {
 	source := PassthroughHeadersFromContext(req.Context())
+	skipSet := normalizeHeaderSet(cfg.SkipHeaders)
+	stripSet := core.TaggingStripHeadersFromContext(req.Context())
 	overlap := make([]string, 0)
 	for name := range cfg.CustomUpstreamHeaders {
-		if sourceHasHeader(source, name) {
+		if sourceHasHeader(source, name) && shouldForward(name, skipSet, cfg.SkipMode, "", stripSet) {
 			overlap = append(overlap, name)
 		}
 	}
@@ -168,8 +170,8 @@ func applyStaticHeaders(req *http.Request, headers map[string]string, userPathAl
 
 // shouldForward reports whether header should be forwarded based on skip/allow
 // configuration. Checks floor (hard-coded blocks and tagging strip set) first,
-// then applies skip/allow list based on mode. Default-closed: when mode is
-// "skip" or "" and the skip set is empty, returns false.
+// then applies skip/allow list based on mode. Default-open: when mode is
+// "skip" or "" and the skip set is empty, all non-blocked headers are forwarded.
 func shouldForward(name string, skipSet map[string]bool, mode string, userPathAlias string, stripSet map[string]struct{}) bool {
 	lower := strings.ToLower(strings.TrimSpace(name))
 

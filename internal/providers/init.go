@@ -230,9 +230,6 @@ func initializeProviders(ctx context.Context, providerMap map[string]ProviderCon
 	var anyPassthroughUserHeaders bool
 	for _, name := range names {
 		pCfg := providerMap[name]
-		if pCfg.HeaderOverrides.PassthroughUserHeaders {
-			anyPassthroughUserHeaders = true
-		}
 		p, err := factory.Create(pCfg)
 		if err != nil {
 			slog.Error("failed to initialize provider",
@@ -240,6 +237,9 @@ func initializeProviders(ctx context.Context, providerMap map[string]ProviderCon
 				"type", pCfg.Type,
 				"error", err)
 			continue
+		}
+		if pCfg.HeaderOverrides.PassthroughUserHeaders {
+			anyPassthroughUserHeaders = true
 		}
 
 		// Availability checks are diagnostics only. Providers stay registered so

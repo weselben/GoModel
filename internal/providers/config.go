@@ -581,8 +581,11 @@ func parseBoolEnv(value string) *bool {
 	case "false", "0", "no", "off", "n":
 		b := false
 		return &b
-	default:
+	case "true", "1", "yes", "on", "y":
 		b := true
+		return &b
+	default:
+		b := false
 		return &b
 	}
 }
