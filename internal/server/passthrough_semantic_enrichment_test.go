@@ -49,7 +49,7 @@ func TestPassthroughSemanticEnrichment_EnrichesPromptBeforeWorkflowResolution(t 
 
 	ctxReq, _ := ensureRequestID(c.Request())
 	c.SetRequest(ctxReq)
-	err := RequestSnapshotCapture("", false)(handler)(c)
+	err := RequestSnapshotCapture("")(handler)(c)
 	require.NoError(t, err)
 
 	if capturedWorkflow == nil || capturedWorkflow.Passthrough == nil {

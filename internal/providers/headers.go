@@ -170,8 +170,8 @@ func applyStaticHeaders(req *http.Request, headers map[string]string, userPathAl
 
 // shouldForward reports whether header should be forwarded based on skip/allow
 // configuration. Checks floor (hard-coded blocks and tagging strip set) first,
-// then applies skip/allow list based on mode. Default-open: when mode is
-// "skip" or "" and the skip set is empty, all non-blocked headers are forwarded.
+// then applies skip/allow list. Default-open: when the mode is not "allow" and
+// the skip set is empty, all non-blocked headers are forwarded.
 func shouldForward(name string, skipSet map[string]bool, mode string, userPathAlias string, stripSet map[string]struct{}) bool {
 	lower := strings.ToLower(strings.TrimSpace(name))
 
@@ -187,22 +187,15 @@ func shouldForward(name string, skipSet map[string]bool, mode string, userPathAl
 		}
 	}
 
-	// Default-open: empty skip set with skip mode means forward all (except blocklist).
-	switch mode {
-	case "allow", "only":
+	// Allow-mode is a closed list; every other mode is default-open with the
+	// configured list acting as a skip list.
+	if mode == "allow" {
 		return skipSet[lower]
-	case "skip", "":
-		if len(skipSet) == 0 {
-			return true
-		}
-		return !skipSet[lower]
-	default:
-		// Unknown mode: default-open when no explicit skip list.
-		if len(skipSet) == 0 {
-			return true
-		}
-		return !skipSet[lower]
 	}
+	if len(skipSet) == 0 {
+		return true
+	}
+	return !skipSet[lower]
 }
 
 // normalizeHeaderSet converts header list to case-insensitive lookup set.

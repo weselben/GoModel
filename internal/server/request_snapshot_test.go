@@ -58,7 +58,7 @@ func TestRequestSnapshotCapture_SetsSnapshotAndSemantics(t *testing.T) {
 	var capturedEnv *core.WhiteBoxPrompt
 	var downstreamBody string
 
-	handler := RequestSnapshotCapture("", false)(func(c *echo.Context) error {
+	handler := RequestSnapshotCapture("")(func(c *echo.Context) error {
 		capturedFrame = core.GetRequestSnapshot(c.Request().Context())
 		capturedEnv = core.GetWhiteBoxPrompt(c.Request().Context())
 		bodyBytes, err := io.ReadAll(c.Request().Body)
@@ -111,7 +111,7 @@ func TestRequestSnapshotCapture_PeeksSelectorsWithoutReadingWholeBody(t *testing
 	var readBeforeHandler int64
 	var downstreamBody string
 
-	handler := RequestSnapshotCapture("", false)(func(c *echo.Context) error {
+	handler := RequestSnapshotCapture("")(func(c *echo.Context) error {
 		readBeforeHandler = body.read
 		capturedFrame = core.GetRequestSnapshot(c.Request().Context())
 		capturedEnv = core.GetWhiteBoxPrompt(c.Request().Context())
@@ -184,7 +184,7 @@ func TestRequestSnapshotCapture_NormalizesUserPathHeader(t *testing.T) {
 	c := e.NewContext(req, rec)
 
 	var capturedFrame *core.RequestSnapshot
-	handler := RequestSnapshotCapture("", false)(func(c *echo.Context) error {
+	handler := RequestSnapshotCapture("")(func(c *echo.Context) error {
 		capturedFrame = core.GetRequestSnapshot(c.Request().Context())
 		return c.String(http.StatusOK, "ok")
 	})
@@ -207,7 +207,7 @@ func TestRequestSnapshotCapture_UsesConfiguredUserPathHeader(t *testing.T) {
 	c := e.NewContext(req, rec)
 
 	var capturedFrame *core.RequestSnapshot
-	handler := RequestSnapshotCapture(headerName, false)(func(c *echo.Context) error {
+	handler := RequestSnapshotCapture(headerName)(func(c *echo.Context) error {
 		capturedFrame = core.GetRequestSnapshot(c.Request().Context())
 		return c.String(http.StatusOK, "ok")
 	})
@@ -235,7 +235,7 @@ func TestRequestSnapshotCapture_PreservesPassthroughRouteParams(t *testing.T) {
 	var capturedFrame *core.RequestSnapshot
 	var capturedEnv *core.WhiteBoxPrompt
 
-	handler := RequestSnapshotCapture("", false)(func(c *echo.Context) error {
+	handler := RequestSnapshotCapture("")(func(c *echo.Context) error {
 		capturedFrame = core.GetRequestSnapshot(c.Request().Context())
 		capturedEnv = core.GetWhiteBoxPrompt(c.Request().Context())
 		return c.String(http.StatusOK, "ok")
@@ -271,7 +271,7 @@ func TestRequestSnapshotCapture_GeneratesRequestIDWhenMissing(t *testing.T) {
 	var capturedFrame *core.RequestSnapshot
 	var downstreamBody string
 
-	handler := RequestSnapshotCapture("", false)(func(c *echo.Context) error {
+	handler := RequestSnapshotCapture("")(func(c *echo.Context) error {
 		capturedFrame = core.GetRequestSnapshot(c.Request().Context())
 		bodyBytes, err := io.ReadAll(c.Request().Body)
 		require.NoError(t, err)
@@ -359,7 +359,7 @@ func TestRequestSnapshotCapture_SkipsOversizedBodies(t *testing.T) {
 	var capturedFrame *core.RequestSnapshot
 	var downstreamBody string
 
-	handler := RequestSnapshotCapture("", false)(func(c *echo.Context) error {
+	handler := RequestSnapshotCapture("")(func(c *echo.Context) error {
 		capturedFrame = core.GetRequestSnapshot(c.Request().Context())
 		bodyBytes, err := io.ReadAll(c.Request().Body)
 		require.NoError(t, err)
@@ -390,7 +390,7 @@ func TestRequestSnapshotCapture_ManagesFilesWithoutReadingMultipartBody(t *testi
 	var capturedFrame *core.RequestSnapshot
 	var capturedEnv *core.WhiteBoxPrompt
 
-	handler := RequestSnapshotCapture("", false)(func(c *echo.Context) error {
+	handler := RequestSnapshotCapture("")(func(c *echo.Context) error {
 		capturedFrame = core.GetRequestSnapshot(c.Request().Context())
 		capturedEnv = core.GetWhiteBoxPrompt(c.Request().Context())
 		return c.String(http.StatusOK, "ok")
@@ -489,31 +489,6 @@ func TestRequestBodyBytes_AttachesReadBodyToSnapshot(t *testing.T) {
 	}
 }
 
-func TestRequestSnapshotCapture_CapturesPassthroughHeadersWhenEnabled(t *testing.T) {
-	e := echo.New()
-
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-4o"}`))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Custom-User-Header", "keep-me")
-	req.Header.Set("Authorization", "Bearer secret")
-	req.Header.Set("X-GoModel-User-Path", "tenant-1")
-
-	rec := httptest.NewRecorder()
-	c := e.NewContext(req, rec)
-
-	handler := RequestSnapshotCapture("", true)(func(c *echo.Context) error {
-		passthrough := providers.PassthroughHeadersFromContext(c.Request().Context())
-		require.NotNil(t, passthrough)
-		assert.Equal(t, "application/json", passthrough.Get("Content-Type"))
-		assert.Equal(t, "keep-me", passthrough.Get("X-Custom-User-Header"))
-		assert.Empty(t, passthrough.Get("Authorization"))
-		assert.Empty(t, passthrough.Get("X-GoModel-User-Path"))
-		return nil
-	})
-
-	require.NoError(t, handler(c))
-}
-
 func TestRequestSnapshotCapture_SkipsPassthroughHeadersWhenDisabled(t *testing.T) {
 	e := echo.New()
 
@@ -523,7 +498,7 @@ func TestRequestSnapshotCapture_SkipsPassthroughHeadersWhenDisabled(t *testing.T
 	rec := httptest.NewRecorder()
 	c := e.NewContext(req, rec)
 
-	handler := RequestSnapshotCapture("", false)(func(c *echo.Context) error {
+	handler := RequestSnapshotCapture("")(func(c *echo.Context) error {
 		assert.Nil(t, providers.PassthroughHeadersFromContext(c.Request().Context()))
 		return nil
 	})

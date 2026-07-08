@@ -286,7 +286,7 @@ func New(provider core.RoutableProvider, cfg *Config) *Server {
 	// Ingress capture (before auth/audit/model validation so they can consume shared raw request state)
 	userPathHeaderName := configuredUserPathHeader(cfg)
 	handler.userPathHeaderName = userPathHeaderName
-	e.Use(RequestSnapshotCapture(userPathHeaderName, false))
+	e.Use(RequestSnapshotCapture(userPathHeaderName))
 
 	if cfg != nil && cfg.PassthroughUserHeadersEnabled {
 		e.Use(PassthroughHeaderCapture(userPathHeaderName))
