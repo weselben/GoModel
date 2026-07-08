@@ -486,10 +486,8 @@ func TestChatCompletion_AutoWireRegression(t *testing.T) {
 				t.Fatalf("ChatCompletion() error = %v", err)
 			}
 
-			if tc.wantCustom != "" {
-				if got := gotHeaders.Get("X-Custom-Header"); got != tc.wantCustom {
-					t.Errorf("X-Custom-Header = %q, want %q", got, tc.wantCustom)
-				}
+			if got := gotHeaders.Get("X-Custom-Header"); got != tc.wantCustom {
+				t.Errorf("X-Custom-Header = %q, want %q", got, tc.wantCustom)
 			}
 			if got := gotHeaders.Get("X-Tenant-Path"); got != tc.wantUserPath {
 				t.Errorf("X-Tenant-Path = %q, want %q", got, tc.wantUserPath)
