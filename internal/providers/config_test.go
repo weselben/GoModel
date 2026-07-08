@@ -1717,6 +1717,64 @@ func TestApplyProviderEnvVars_HeaderFieldsEnvWinsOverYAML(t *testing.T) {
 	}
 }
 
+func TestApplyProviderEnvVars_SuffixedHeaderFieldsEnvWinsOverYAML(t *testing.T) {
+	raw := map[string]config.RawProviderConfig{
+		"openai-east": {
+			Type:                           "openai",
+			APIKey:                         "sk-yaml-east",
+			CustomUpstreamHeaders:          map[string]string{"X-From-YAML": "yaml"},
+			PassthroughUserHeaders:         false,
+			PassthroughUserHeadersSkip:     []string{"yaml-skip"},
+			PassthroughUserHeadersSkipMode: "skip",
+		},
+	}
+
+	t.Setenv("OPENAI_EAST_PASSTHROUGH_USER_HEADERS", "true")
+	t.Setenv("OPENAI_EAST_CUSTOM_UPSTREAM_HEADERS", "X-From-Env=env")
+	t.Setenv("OPENAI_EAST_PASSTHROUGH_USER_HEADERS_SKIP", "env-skip")
+	t.Setenv("OPENAI_EAST_PASSTHROUGH_USER_HEADERS_SKIP_MODE", "allow")
+
+	got := applyProviderEnvVars(raw, testDiscoveryConfigs)
+
+	p, exists := got["openai-east"]
+	if !exists {
+		t.Fatal("expected openai-east provider to remain after env overlay")
+	}
+	if !p.PassthroughUserHeaders {
+		t.Errorf("PassthroughUserHeaders = false, want true")
+	}
+	if got, want := p.CustomUpstreamHeaders, map[string]string{"X-From-Env": "env"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("CustomUpstreamHeaders = %v, want %v", got, want)
+	}
+	if got, want := p.PassthroughUserHeadersSkip, []string{"env-skip"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("PassthroughUserHeadersSkip = %v, want %v", got, want)
+	}
+	if got, want := p.PassthroughUserHeadersSkipMode, "allow"; got != want {
+		t.Errorf("PassthroughUserHeadersSkipMode = %q, want %q", got, want)
+	}
+}
+
+func TestApplyProviderEnvVars_HeaderFieldsEnvSkipsAmbiguousProvider(t *testing.T) {
+	raw := map[string]config.RawProviderConfig{
+		"openai-a": {Type: "openai", APIKey: "sk-a"},
+		"openai-b": {Type: "openai", APIKey: "sk-b"},
+	}
+
+	t.Setenv("OPENAI_PASSTHROUGH_USER_HEADERS", "true")
+	t.Setenv("OPENAI_CUSTOM_UPSTREAM_HEADERS", "X-From-Env=env")
+
+	got := applyProviderEnvVars(raw, testDiscoveryConfigs)
+
+	for name, p := range got {
+		if p.PassthroughUserHeaders {
+			t.Errorf("provider %q should not have been overlaid with header fields", name)
+		}
+		if len(p.CustomUpstreamHeaders) != 0 {
+			t.Errorf("provider %q should not have custom upstream headers from env", name)
+		}
+	}
+}
+
 func TestApplyProviderEnvVars_PassthroughUserHeadersBidirectional(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -1859,5 +1917,142 @@ func TestResolveProviders_InvalidPassthroughSkipMode(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "provider \"openai\"") || !strings.Contains(err.Error(), "invalid passthrough_user_headers_skip_mode") {
 		t.Errorf("error = %v, want provider openai invalid passthrough_user_headers_skip_mode error", err)
+	}
+}
+
+func TestParseBoolEnv_Variants(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  *bool
+	}{
+		{name: "true", value: "true", want: boolPtr(true)},
+		{name: "TRUE", value: "TRUE", want: boolPtr(true)},
+		{name: "1", value: "1", want: boolPtr(true)},
+		{name: "yes", value: "yes", want: boolPtr(true)},
+		{name: "on", value: "on", want: boolPtr(true)},
+		{name: "y", value: "y", want: boolPtr(true)},
+		{name: "false", value: "false", want: boolPtr(false)},
+		{name: "0", value: "0", want: boolPtr(false)},
+		{name: "no", value: "no", want: boolPtr(false)},
+		{name: "off", value: "off", want: boolPtr(false)},
+		{name: "n", value: "n", want: boolPtr(false)},
+		{name: "empty", value: "", want: nil},
+		{name: "invalid", value: "invalid", want: boolPtr(false)},
+		{name: "whitespace", value: "   ", want: nil},
+		{name: "true with spaces", value: "  TRUE  ", want: boolPtr(true)},
+		{name: "false with spaces", value: "  false  ", want: boolPtr(false)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseBoolEnv(tt.value)
+			if (got == nil && tt.want != nil) || (got != nil && tt.want == nil) {
+				t.Errorf("parseBoolEnv(%q) = %v, want %v", tt.value, got, tt.want)
+				return
+			}
+			if got != nil && tt.want != nil && *got != *tt.want {
+				t.Errorf("parseBoolEnv(%q) = %v, want %v", tt.value, *got, *tt.want)
+			}
+		})
+	}
+}
+
+func boolPtr(b bool) *bool {
+	return &b
+}
+
+func TestParseHeaderMapEnv_Variants(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  map[string]string
+	}{
+		{name: "single header", value: "X-Custom=value", want: map[string]string{"X-Custom": "value"}},
+		{name: "two headers", value: "X-Custom=value,X-Another=test", want: map[string]string{"X-Custom": "value", "X-Another": "test"}},
+		{name: "empty string", value: "", want: nil},
+		{name: "spaces around", value: " X-Custom=value , X-Another=test ", want: map[string]string{"X-Custom": "value", "X-Another": "test"}},
+		{name: "trims key and value spaces", value: "  X-Custom  =  value  ", want: map[string]string{"X-Custom": "value"}},
+		{name: "skips empty pairs", value: ",,,", want: nil},
+		{name: "skips empty between commas", value: "X-Custom=value,,,X-Another=test", want: map[string]string{"X-Custom": "value", "X-Another": "test"}},
+		{name: "value with comma splits", value: "X-Custom=val,ue", want: map[string]string{"X-Custom": "val"}},
+		{name: "no equals", value: "InvalidHeader", want: nil},
+		{name: "empty key", value: "=value", want: nil},
+		{name: "empty value allowed", value: "X-Custom=", want: map[string]string{"X-Custom": ""}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseHeaderMapEnv(tt.value)
+			if (got == nil && len(tt.want) > 0) || (got != nil && tt.want == nil) {
+				t.Errorf("parseHeaderMapEnv(%q) = %v, want %v", tt.value, got, tt.want)
+				return
+			}
+			if got != nil && tt.want != nil {
+				if len(got) != len(tt.want) {
+					t.Errorf("parseHeaderMapEnv(%q) length %d, want %d", tt.value, len(got), len(tt.want))
+				}
+				for k, v := range tt.want {
+					if got[k] != v {
+						t.Errorf("parseHeaderMapEnv(%q)[%q] = %q, want %q", tt.value, k, got[k], v)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestCollectProviderEnvValues_HeaderOverrides(t *testing.T) {
+	tests := []struct {
+		name            string
+		prefix          string
+		environ         []string
+		wantPassthrough bool
+		wantSkip        []string
+		wantSkipMode    string
+	}{
+		{
+			name:            "passthrough enabled via env",
+			prefix:          "PROVIDER",
+			environ:         []string{"PROVIDER_PASSTHROUGH_USER_HEADERS=true"},
+			wantPassthrough: true,
+		},
+		{
+			name:    "passthrough disabled via env",
+			prefix:  "PROVIDER",
+			environ: []string{"PROVIDER_PASSTHROUGH_USER_HEADERS=false"},
+		},
+		{
+			name:   "skip headers and mode via env",
+			prefix: "PROVIDER",
+			environ: []string{
+				"PROVIDER_PASSTHROUGH_USER_HEADERS=true",
+				"PROVIDER_PASSTHROUGH_USER_HEADERS_SKIP=X-Debug,X-Trace",
+				"PROVIDER_PASSTHROUGH_USER_HEADERS_SKIP_MODE=allow",
+			},
+			wantPassthrough: true,
+			wantSkip:        []string{"X-Debug", "X-Trace"},
+			wantSkipMode:    "allow",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			groups := collectProviderEnvValues(tt.prefix, DiscoveryConfig{}, tt.environ)
+			values := groups[""]
+
+			got := false
+			if values.PassthroughUserHeaders != nil {
+				got = *values.PassthroughUserHeaders
+			}
+			if got != tt.wantPassthrough {
+				t.Errorf("PassthroughUserHeaders = %v, want %v", got, tt.wantPassthrough)
+			}
+			if len(tt.wantSkip) > 0 {
+				if len(values.PassthroughUserHeadersSkip) != len(tt.wantSkip) {
+					t.Errorf("PassthroughUserHeadersSkip = %v, want %v", values.PassthroughUserHeadersSkip, tt.wantSkip)
+				}
+			}
+			if tt.wantSkipMode != "" && values.PassthroughUserHeadersSkipMode != tt.wantSkipMode {
+				t.Errorf("PassthroughUserHeadersSkipMode = %q, want %q", values.PassthroughUserHeadersSkipMode, tt.wantSkipMode)
+			}
+		})
 	}
 }

@@ -1,9 +1,11 @@
 package providers
 
 import (
+	"bytes"
 	"context"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -519,7 +521,7 @@ func TestApplyHeaderOverrides_PassthroughDisabled_SkipsUserHeaders(t *testing.T)
 	cfg := HeaderOverridesConfig{
 		PassthroughUserHeaders: false,
 		SkipMode:               "allow",
-		SkipHeaders:           []string{"X-Tenant", "X-Team"},
+		SkipHeaders:            []string{"X-Tenant", "X-Team"},
 	}
 	ApplyHeaderOverrides(req, cfg, "")
 
@@ -573,7 +575,7 @@ func TestApplyHeaderOverrides_CustomHeadersAppliedWhenPassthroughDisabled(t *tes
 		PassthroughUserHeaders: false,
 		CustomUpstreamHeaders: map[string]string{
 			"X-Provider-Region": "us-east-1",
-			"X-Trace-Id":       "static-123",
+			"X-Trace-Id":        "static-123",
 		},
 	}
 	ApplyHeaderOverrides(req, cfg, "")
@@ -621,5 +623,112 @@ func TestApplyHeaderOverrides_PassthroughEnabled_AllowModeEmptyList(t *testing.T
 		if got := req.Header.Get(name); got != "" {
 			t.Errorf("header %q should not be forwarded in allow mode with empty list, got %q", name, got)
 		}
+	}
+}
+
+func TestPassthroughHeadersFromContext_EdgeCases(t *testing.T) {
+	ctx := context.Background()
+
+	if got := PassthroughHeadersFromContext(ctx); got != nil {
+		t.Errorf("PassthroughHeadersFromContext(empty ctx) = %v, want nil", got)
+	}
+
+	ctx = WithPassthroughHeaders(ctx, http.Header{"X-Test": []string{"value"}})
+	got := PassthroughHeadersFromContext(ctx)
+	if got == nil || got.Get("X-Test") == "" {
+		t.Errorf("PassthroughHeadersFromContext(with headers) missing X-Test")
+	}
+
+	ctx2 := WithPassthroughHeaders(context.Background(), http.Header{})
+	if got2 := PassthroughHeadersFromContext(ctx2); got2 == nil {
+		t.Error("PassthroughHeadersFromContext(empty headers) should return non-nil header")
+	}
+}
+
+func TestSourceHasHeader_Variants(t *testing.T) {
+	tests := []struct {
+		name   string
+		source http.Header
+		header string
+		want   bool
+	}{
+		{name: "header present", source: http.Header{"X-Test": []string{"val"}}, header: "X-Test", want: true},
+		{name: "header missing", source: http.Header{"X-Other": []string{"val"}}, header: "X-Test", want: false},
+		{name: "empty source", source: http.Header{}, header: "X-Test", want: false},
+		{name: "nil source", source: nil, header: "X-Test", want: false},
+		{name: "case insensitive present", source: http.Header{"x-test": []string{"val"}}, header: "X-Test", want: true},
+		{name: "case insensitive missing", source: http.Header{"X-Other": []string{"val"}}, header: "x-test", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := sourceHasHeader(tt.source, tt.header); got != tt.want {
+				t.Errorf("sourceHasHeader(%q, %q) = %v, want %v", tt.source, tt.header, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLogStaticOverridden_Overlap(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	slog.SetDefault(logger)
+
+	req := httptest.NewRequest("POST", "/", nil)
+	cfg := HeaderOverridesConfig{
+		CustomUpstreamHeaders:  map[string]string{"X-Custom": "static"},
+		PassthroughUserHeaders: true,
+	}
+	req = req.WithContext(WithPassthroughHeaders(req.Context(), http.Header{"X-Custom": []string{"passthrough"}}))
+
+	logStaticOverridden(req, cfg)
+	if buf.String() == "" {
+		t.Error("logStaticOverridden should produce log output on overlap")
+	}
+}
+
+func TestLogStaticOverridden_Overlap_EmptyCase(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	slog.SetDefault(logger)
+
+	req := httptest.NewRequest("POST", "/", nil)
+	cfg := HeaderOverridesConfig{
+		CustomUpstreamHeaders:  map[string]string{"X-Static": "val"},
+		PassthroughUserHeaders: true,
+	}
+	req = req.WithContext(WithPassthroughHeaders(req.Context(), http.Header{"X-Pass": []string{"val"}}))
+
+	logStaticOverridden(req, cfg)
+	if buf.String() != "" {
+		t.Errorf("logStaticOverridden without overlap should not log, got %q", buf.String())
+	}
+}
+
+func TestApplyPassthroughHeaders_Variants(t *testing.T) {
+	tests := []struct {
+		name            string
+		ctx             context.Context
+		config          HeaderOverridesConfig
+		userPathAlias   string
+		wantPassthrough bool
+	}{
+		{name: "no context", ctx: context.Background(), config: HeaderOverridesConfig{PassthroughUserHeaders: true}, wantPassthrough: false},
+		{name: "disabled by config", ctx: context.Background(), config: HeaderOverridesConfig{PassthroughUserHeaders: false}, wantPassthrough: false},
+		{name: "enabled with headers", ctx: WithPassthroughHeaders(context.Background(), http.Header{"X-Test": []string{"val"}}), config: HeaderOverridesConfig{PassthroughUserHeaders: true}, wantPassthrough: true},
+		{name: "enabled but headers empty", ctx: WithPassthroughHeaders(context.Background(), http.Header{}), config: HeaderOverridesConfig{PassthroughUserHeaders: true}, wantPassthrough: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("POST", "/", nil)
+			req = req.WithContext(tt.ctx)
+
+			initialLen := len(req.Header)
+			applyPassthroughHeaders(req, tt.config, tt.userPathAlias)
+
+			hasPassthrough := len(req.Header) > initialLen && req.Header.Get("X-Test") != ""
+			if hasPassthrough != tt.wantPassthrough {
+				t.Errorf("applyPassthroughHeaders passthrough presence = %v, want %v", hasPassthrough, tt.wantPassthrough)
+			}
+		})
 	}
 }
