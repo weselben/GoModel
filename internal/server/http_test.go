@@ -62,6 +62,37 @@ func TestRequestIDMiddleware(t *testing.T) {
 	})
 }
 
+func TestServer_RegistersPassthroughHeaderCaptureWhenEnabled(t *testing.T) {
+	mock := &mockProvider{}
+	srv := New(mock, &Config{PassthroughUserHeadersEnabled: true})
+
+	var captured http.Header
+	srv.echo.GET("/capture", func(c *echo.Context) error {
+		captured = providers.PassthroughHeadersFromContext(c.Request().Context())
+		return c.NoContent(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/capture", nil)
+	req.Header.Set("X-Custom-Header", "keep-me")
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+
+	srv.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if captured == nil {
+		t.Fatal("expected passthrough headers to be captured in request context")
+	}
+	if got := captured.Get("X-Custom-Header"); got != "keep-me" {
+		t.Errorf("X-Custom-Header = %q, want keep-me", got)
+	}
+	if got := captured.Get("Authorization"); got != "" {
+		t.Errorf("Authorization = %q, want empty (credential headers are blocked)", got)
+	}
+}
+
 func TestServerUsesDirectIPExtractorByDefault(t *testing.T) {
 	mock := &mockProvider{}
 	srv := New(mock, nil)
