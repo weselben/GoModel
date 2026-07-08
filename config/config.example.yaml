@@ -13,7 +13,7 @@ server:
   enable_passthrough_routes: true # expose /p/{provider}/{endpoint} passthrough routes
   allow_passthrough_v1_alias: true # allow /p/{provider}/v1/... while keeping /p/{provider}/... canonical
   user_path_header: "X-GoModel-User-Path" # env: USER_PATH_HEADER; inbound header used for user_path scoping
-  enabled_passthrough_providers: ["openai", "anthropic", "openrouter", "zai", "vllm", "deepseek", "bailian"] # providers enabled on /p/{provider}/...
+  enabled_passthrough_providers: ["openai", "anthropic", "openrouter", "zai", "vllm", "deepseek"] # providers enabled on /p/{provider}/...
   realtime_enabled: true # env: REALTIME_ENABLED; expose /v1/realtime websocket and /p/{provider}/v1/realtime upgrades (OpenAI only)
 
 models:
@@ -266,6 +266,17 @@ providers:
   openai:
     type: openai
     api_key: "sk-..."
+    # Forward or inject custom headers for this provider. See docs/features/custom-headers.mdx
+    # for details. Transport headers (Connection, Transfer-Encoding, etc.) are always blocked.
+    # header_overrides:
+    #   passthrough_user_headers: true
+    #   skip_mode: allow
+    #   skip_headers:
+    #     - "X-Title"
+    #     - "User-Agent"
+    #   custom_upstream_headers:
+    #     X-Title: "MyApp"
+    #     User-Agent: "MyApp/1.0.0"
     # Per-provider resilience overrides (optional).
     # Only specified fields override the global defaults above.
     # resilience:
@@ -312,6 +323,14 @@ providers:
   groq:
     type: groq
     api_key: "gsk_..."
+    # Forward or inject custom headers for this provider. See docs/features/custom-headers.mdx
+    # header_overrides:
+    #   passthrough_user_headers: true
+    #   skip_mode: allow
+    #   skip_headers:
+    #     - "X-Title"
+    #   custom_upstream_headers:
+    #     X-Title: "MyApp"
 
   fireworks:
     type: fireworks
@@ -401,6 +420,14 @@ providers:
   #   type: "deepseek"
   #   base_url: "https://api.deepseek.com"
   #   api_key: "${DEEPSEEK_API_KEY}"
+  #   # Forward or inject custom headers for this provider. See docs/features/custom-headers.mdx
+  #   # header_overrides:
+  #   #   passthrough_user_headers: true
+  #   #   skip_mode: allow
+  #   #   skip_headers:
+  #   #     - "X-Title"
+  #   #   custom_upstream_headers:
+  #   #     X-Title: "MyApp"
 
   # Example: Amazon Bedrock. The provider has no API key — auth is taken from
   # the standard AWS credential chain (env vars, AWS_PROFILE, IAM Identity
