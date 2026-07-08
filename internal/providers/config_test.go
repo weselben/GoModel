@@ -1961,6 +1961,59 @@ func boolPtr(b bool) *bool {
 	return &b
 }
 
+func TestProviderEnvValues_Empty_HeaderFields(t *testing.T) {
+	t.Run("false when only passthrough user headers is set", func(t *testing.T) {
+		enabled := true
+		v := providerEnvValues{PassthroughUserHeaders: &enabled}
+		if v.empty() {
+			t.Error("empty() = true, want false")
+		}
+	})
+
+	t.Run("false when only skip headers is set", func(t *testing.T) {
+		v := providerEnvValues{PassthroughUserHeadersSkip: []string{"X-Debug"}}
+		if v.empty() {
+			t.Error("empty() = true, want false")
+		}
+	})
+
+	t.Run("false when only skip mode is set", func(t *testing.T) {
+		v := providerEnvValues{PassthroughUserHeadersSkipMode: "allow"}
+		if v.empty() {
+			t.Error("empty() = true, want false")
+		}
+	})
+
+	t.Run("true when nothing is set", func(t *testing.T) {
+		v := providerEnvValues{}
+		if !v.empty() {
+			t.Error("empty() = false, want true")
+		}
+	})
+}
+
+func TestProviderEnvValues_RawConfig_PassthroughUserHeaders(t *testing.T) {
+	t.Run("set when env enables passthrough", func(t *testing.T) {
+		enabled := true
+		v := providerEnvValues{
+			APIKey:                 "sk-test",
+			PassthroughUserHeaders: &enabled,
+		}
+		cfg := v.rawConfig("openai", DiscoveryConfig{DefaultBaseURL: "http://default"})
+		if !cfg.PassthroughUserHeaders {
+			t.Errorf("PassthroughUserHeaders = false, want true")
+		}
+	})
+
+	t.Run("omitted when env does not set passthrough", func(t *testing.T) {
+		v := providerEnvValues{APIKey: "sk-test"}
+		cfg := v.rawConfig("openai", DiscoveryConfig{DefaultBaseURL: "http://default"})
+		if cfg.PassthroughUserHeaders {
+			t.Errorf("PassthroughUserHeaders = true, want false")
+		}
+	})
+}
+
 func TestParseHeaderMapEnv_Variants(t *testing.T) {
 	tests := []struct {
 		name  string

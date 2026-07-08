@@ -414,6 +414,41 @@ func TestInitializeProviders_AnyPassthroughUserHeaders(t *testing.T) {
 	}
 }
 
+func TestInitializeProviders_PassthroughUserHeadersNotSetOnFailedProvider(t *testing.T) {
+	ctx := t.Context()
+
+	factory := NewProviderFactory()
+	factory.Add(Registration{
+		Type: "test",
+		New: func(ProviderConfig, ProviderOptions) core.Provider {
+			return &initTestProvider{}
+		},
+	})
+
+	registry := NewModelRegistry()
+	count, anyPassthrough, err := initializeProviders(ctx, map[string]ProviderConfig{
+		"failing": {
+			Type:            "unknown-type",
+			APIKey:          "sk-test",
+			HeaderOverrides: HeaderOverridesConfig{PassthroughUserHeaders: true},
+		},
+		"ok": {
+			Type:            "test",
+			APIKey:          "sk-test",
+			HeaderOverrides: HeaderOverridesConfig{PassthroughUserHeaders: false},
+		},
+	}, factory, registry)
+	if err != nil {
+		t.Fatalf("initializeProviders() error = %v, want nil", err)
+	}
+	if count != 1 {
+		t.Fatalf("initializeProviders() count = %d, want 1", count)
+	}
+	if anyPassthrough {
+		t.Fatal("initializeProviders() anyPassthrough = true, want false for failed provider")
+	}
+}
+
 func TestInit_PropagateInvalidHeaderOverridesSkipMode(t *testing.T) {
 	ctx := t.Context()
 
