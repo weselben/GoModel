@@ -268,15 +268,14 @@ providers:
     api_key: "sk-..."
     # Forward or inject custom headers for this provider. See docs/features/custom-headers.mdx
     # for details. Transport headers (Connection, Transfer-Encoding, etc.) are always blocked.
-    # header_overrides:
-    #   passthrough_user_headers: true
-    #   skip_mode: allow
-    #   skip_headers:
-    #     - "X-Title"
-    #     - "User-Agent"
-    #   custom_upstream_headers:
-    #     X-Title: "MyApp"
-    #     User-Agent: "MyApp/1.0.0"
+    # passthrough_user_headers: true
+    # passthrough_user_headers_skip_mode: allow
+    # passthrough_user_headers_skip:
+    #   - "X-Title"
+    #   - "User-Agent"
+    # custom_upstream_headers:
+    #   X-Title: "MyApp"
+    #   User-Agent: "MyApp/1.0.0"
     # Per-provider resilience overrides (optional).
     # Only specified fields override the global defaults above.
     # resilience:
@@ -324,13 +323,12 @@ providers:
     type: groq
     api_key: "gsk_..."
     # Forward or inject custom headers for this provider. See docs/features/custom-headers.mdx
-    # header_overrides:
-    #   passthrough_user_headers: true
-    #   skip_mode: allow
-    #   skip_headers:
-    #     - "X-Title"
-    #   custom_upstream_headers:
-    #     X-Title: "MyApp"
+    # passthrough_user_headers: true
+    # passthrough_user_headers_skip_mode: allow
+    # passthrough_user_headers_skip:
+    #   - "X-Title"
+    # custom_upstream_headers:
+    #   X-Title: "MyApp"
 
   fireworks:
     type: fireworks
@@ -421,13 +419,12 @@ providers:
   #   base_url: "https://api.deepseek.com"
   #   api_key: "${DEEPSEEK_API_KEY}"
   #   # Forward or inject custom headers for this provider. See docs/features/custom-headers.mdx
-  #   # header_overrides:
-  #   #   passthrough_user_headers: true
-  #   #   skip_mode: allow
-  #   #   skip_headers:
+  #   # passthrough_user_headers: true
+  #   # passthrough_user_headers_skip_mode: allow
+  #   # passthrough_user_headers_skip:
   #   #     - "X-Title"
-  #   #   custom_upstream_headers:
-  #   #     X-Title: "MyApp"
+  #   # custom_upstream_headers:
+  #   #   X-Title: "MyApp"
 
   # Example: Amazon Bedrock. The provider has no API key — auth is taken from
   # the standard AWS credential chain (env vars, AWS_PROFILE, IAM Identity
