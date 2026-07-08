@@ -176,6 +176,8 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		}
 	}
 
+	cfg.Factory.SetUserPathHeader(appCfg.Server.UserPathHeader)
+
 	providerResult, err := providers.Init(ctx, cfg.AppConfig, cfg.Factory)
 	if err != nil {
 		return fail("failed to initialize providers", err)
@@ -556,6 +558,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		RealtimeEnabled:                 appCfg.Server.RealtimeEnabled,
 		AllowPassthroughV1Alias:         &allowPassthroughV1Alias,
 		UserPathHeader:                  appCfg.Server.UserPathHeader,
+		PassthroughUserHeadersEnabled:   providerResult.AnyPassthroughUserHeaders,
 		SwaggerEnabled:                  swaggerEnabled,
 		Tagging:                         taggingResult.Service,
 	}

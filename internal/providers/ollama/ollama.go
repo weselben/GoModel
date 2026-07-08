@@ -115,7 +115,10 @@ func setHeaders(req *http.Request, apiKey string) {
 	})
 }
 
-// setNativeHeaders applies the same header policy on the native /api client.
+// setNativeHeaders applies only the auth header policy on the native /api client.
+// It deliberately does NOT apply user-configured header overrides so that
+// passthrough/static headers intended for the OpenAI-compatible /v1 surface do
+// not leak into the native /api/embed endpoint.
 func (p *Provider) setNativeHeaders(req *http.Request) {
 	setHeaders(req, p.apiKey)
 }

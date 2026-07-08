@@ -32,6 +32,10 @@ type CompatibleProviderConfig struct {
 	// context and body (e.g. conversation affinity headers). Nil results are
 	// ignored.
 	ChatRequestHeaders func(context.Context, *core.ChatRequest) http.Header
+	// HeaderOverrides is per-provider header override configuration.
+	HeaderOverrides providers.HeaderOverridesConfig
+	// UserPathAlias is the configured user-path header alias for this provider.
+	UserPathAlias string
 }
 
 // CompatibleProvider is the single transport engine for every
@@ -81,11 +85,9 @@ func NewCompatibleProvider(apiKey string, opts providers.ProviderOptions, cfg Co
 		Hooks:          opts.Hooks,
 		CircuitBreaker: opts.Resilience.CircuitBreaker,
 	}
-	p.client = llmclient.New(clientCfg, func(req *http.Request) {
-		if cfg.SetHeaders != nil {
-			cfg.SetHeaders(req, apiKey)
-		}
-	})
+	cfg.HeaderOverrides = opts.HeaderOverrides
+	cfg.UserPathAlias = opts.UserPathHeader
+	p.client = llmclient.New(clientCfg, buildHeaderMutator(cfg, apiKey))
 	return p
 }
 
@@ -102,12 +104,20 @@ func NewCompatibleProviderWithHTTPClient(apiKey string, httpClient *http.Client,
 	}
 	clientCfg := llmclient.DefaultConfig(cfg.ProviderName, cfg.BaseURL)
 	clientCfg.Hooks = hooks
-	p.client = llmclient.NewWithHTTPClient(httpClient, clientCfg, func(req *http.Request) {
+	p.client = llmclient.NewWithHTTPClient(httpClient, clientCfg, buildHeaderMutator(cfg, apiKey))
+	return p
+}
+
+// buildHeaderMutator returns a function that applies provider-specific headers
+// and then header overrides. It is the single source of truth for the header
+// mutation used by both CompatibleProvider constructors.
+func buildHeaderMutator(cfg CompatibleProviderConfig, apiKey string) func(*http.Request) {
+	return func(req *http.Request) {
 		if cfg.SetHeaders != nil {
 			cfg.SetHeaders(req, apiKey)
 		}
-	})
-	return p
+		providers.ApplyHeaderOverrides(req, cfg.HeaderOverrides, cfg.UserPathAlias)
+	}
 }
 
 func (p *CompatibleProvider) SetBaseURL(url string) {

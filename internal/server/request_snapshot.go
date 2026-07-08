@@ -11,16 +11,24 @@ import (
 
 	"gomodel/internal/auditlog"
 	"gomodel/internal/core"
+	"gomodel/internal/providers"
 )
 
 const requestSnapshotInlineBodyLimit int64 = 64 * 1024
+
+func configuredUserPathHeaderName(headerNames ...string) string {
+	if len(headerNames) == 0 {
+		return core.UserPathHeader
+	}
+	return core.UserPathHeaderName(headerNames[0])
+}
 
 // RequestSnapshotCapture captures immutable transport-level request data for
 // model-facing endpoints. Known-small JSON bodies are captured once for the
 // hot path; larger or unknown-size bodies only get a bounded selector peek and
 // stay on the live request stream until the handler actually decodes them.
-func RequestSnapshotCapture(userPathHeader ...string) echo.MiddlewareFunc {
-	userPathHeaderName := configuredUserPathHeaderName(userPathHeader...)
+func RequestSnapshotCapture(userPathHeaderName string, capturePassthroughHeaders bool) echo.MiddlewareFunc {
+	userPathHeaderName = core.UserPathHeaderName(userPathHeaderName)
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c *echo.Context) error {
 			req, requestID := ensureRequestID(c.Request())
@@ -29,6 +37,11 @@ func RequestSnapshotCapture(userPathHeader ...string) echo.MiddlewareFunc {
 			if !desc.IngressManaged {
 				c.SetRequest(req)
 				return next(c)
+			}
+
+			if capturePassthroughHeaders {
+				req = req.WithContext(providers.WithPassthroughHeaders(req.Context(), providers.FilterIncomingHeaders(req.Header, userPathHeaderName)))
+				c.SetRequest(req)
 			}
 
 			userPath, err := core.NormalizeUserPath(req.Header.Get(userPathHeaderName))
@@ -73,13 +86,6 @@ func RequestSnapshotCapture(userPathHeader ...string) echo.MiddlewareFunc {
 			return next(c)
 		}
 	}
-}
-
-func configuredUserPathHeaderName(headerNames ...string) string {
-	if len(headerNames) == 0 {
-		return core.UserPathHeader
-	}
-	return core.UserPathHeaderName(headerNames[0])
 }
 
 func ensureRequestID(req *http.Request) (*http.Request, string) {

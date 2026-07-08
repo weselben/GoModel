@@ -34,10 +34,19 @@ type Provider struct {
 
 // New creates a new vLLM provider.
 func New(cfg providers.ProviderConfig, opts providers.ProviderOptions) core.Provider {
-	baseURL := providers.ResolveBaseURL(cfg.BaseURL, defaultBaseURL)
+	return newProvider(cfg.APIKey, opts, providers.ResolveBaseURL(cfg.BaseURL, defaultBaseURL))
+}
+
+// NewWithHTTPClient creates a new vLLM provider with a custom HTTP client.
+// If httpClient is nil, http.DefaultClient is used.
+func NewWithHTTPClient(apiKey string, baseURL string, httpClient *http.Client, hooks llmclient.Hooks) *Provider {
+	return newProviderWithHTTPClient(apiKey, providers.ResolveBaseURL(baseURL, defaultBaseURL), httpClient, hooks)
+}
+
+func newProvider(apiKey string, opts providers.ProviderOptions, baseURL string) *Provider {
 	rootBaseURL := passthroughBaseURL(baseURL)
 	return &Provider{
-		compatible: openai.NewCompatibleProvider(cfg.APIKey, opts, openai.CompatibleProviderConfig{
+		compatible: openai.NewCompatibleProvider(apiKey, opts, openai.CompatibleProviderConfig{
 			ProviderName: "vllm",
 			BaseURL:      baseURL,
 			SetHeaders:   setHeaders,
@@ -48,27 +57,28 @@ func New(cfg providers.ProviderConfig, opts providers.ProviderOptions) core.Prov
 			Retry:          opts.Resilience.Retry,
 			Hooks:          opts.Hooks,
 			CircuitBreaker: opts.Resilience.CircuitBreaker,
-		}, func(req *http.Request) {
-			setHeaders(req, cfg.APIKey)
-		}),
+		}, rootHeaderSetter(apiKey, opts.HeaderOverrides, opts.UserPathHeader)),
 	}
 }
 
-// NewWithHTTPClient creates a new vLLM provider with a custom HTTP client.
-// If httpClient is nil, http.DefaultClient is used.
-func NewWithHTTPClient(apiKey string, baseURL string, httpClient *http.Client, hooks llmclient.Hooks) *Provider {
-	resolvedBaseURL := providers.ResolveBaseURL(baseURL, defaultBaseURL)
-	rootClientCfg := llmclient.DefaultConfig("vllm", passthroughBaseURL(resolvedBaseURL))
+func newProviderWithHTTPClient(apiKey string, baseURL string, httpClient *http.Client, hooks llmclient.Hooks) *Provider {
+	rootBaseURL := passthroughBaseURL(baseURL)
+	rootClientCfg := llmclient.DefaultConfig("vllm", rootBaseURL)
 	rootClientCfg.Hooks = hooks
 	return &Provider{
 		compatible: openai.NewCompatibleProviderWithHTTPClient(apiKey, httpClient, hooks, openai.CompatibleProviderConfig{
 			ProviderName: "vllm",
-			BaseURL:      resolvedBaseURL,
+			BaseURL:      baseURL,
 			SetHeaders:   setHeaders,
 		}),
-		rootClient: llmclient.NewWithHTTPClient(httpClient, rootClientCfg, func(req *http.Request) {
-			setHeaders(req, apiKey)
-		}),
+		rootClient: llmclient.NewWithHTTPClient(httpClient, rootClientCfg, rootHeaderSetter(apiKey, providers.HeaderOverridesConfig{}, "")),
+	}
+}
+
+func rootHeaderSetter(apiKey string, headerOverrides providers.HeaderOverridesConfig, userPathAlias string) func(*http.Request) {
+	return func(req *http.Request) {
+		setHeaders(req, apiKey)
+		providers.ApplyHeaderOverrides(req, headerOverrides, userPathAlias)
 	}
 }
 

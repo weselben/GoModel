@@ -80,6 +80,7 @@ type Config struct {
 	EnabledPassthroughProviders     []string                               // Provider types enabled on /p/{provider}/... passthrough routes
 	AllowPassthroughV1Alias         *bool                                  // Allow /p/{provider}/v1/... aliases; nil defaults to true
 	UserPathHeader                  string                                 // Header carrying the request user path (default: X-GoModel-User-Path)
+	PassthroughUserHeadersEnabled   bool                                   // Capture incoming headers for providers with passthrough_user_headers
 	AdminEndpointsEnabled           bool                                   // Whether admin API endpoints are enabled
 	AdminUIEnabled                  bool                                   // Whether admin dashboard UI is enabled
 	AdminHandler                    *admin.Handler                         // Admin API handler (nil if disabled)
@@ -285,7 +286,11 @@ func New(provider core.RoutableProvider, cfg *Config) *Server {
 	// Ingress capture (before auth/audit/model validation so they can consume shared raw request state)
 	userPathHeaderName := configuredUserPathHeader(cfg)
 	handler.userPathHeaderName = userPathHeaderName
-	e.Use(RequestSnapshotCapture(userPathHeaderName))
+	e.Use(RequestSnapshotCapture(userPathHeaderName, cfg != nil && cfg.PassthroughUserHeadersEnabled))
+
+	if cfg != nil && cfg.PassthroughUserHeadersEnabled {
+		e.Use(PassthroughHeaderCapture(userPathHeaderName))
+	}
 
 	// Request labelling from configured tagging headers (after snapshot capture so
 	// audit logging still sees the original headers, before audit logging so

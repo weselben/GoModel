@@ -28,15 +28,17 @@ var Registration = providers.Registration{
 
 type Provider struct {
 	*openai.CompatibleProvider
-	siteURL string
-	appName string
+	siteURL         string
+	appName         string
+	headerOverrides providers.HeaderOverridesConfig
 }
 
 func New(cfg providers.ProviderConfig, opts providers.ProviderOptions) core.Provider {
 	baseURL := providers.ResolveBaseURL(cfg.BaseURL, defaultBaseURL)
 	p := &Provider{
-		siteURL: envOrDefault("OPENROUTER_SITE_URL", defaultSiteURL),
-		appName: envOrDefault("OPENROUTER_APP_NAME", defaultAppName),
+		siteURL:         envOrDefault("OPENROUTER_SITE_URL", defaultSiteURL),
+		appName:         envOrDefault("OPENROUTER_APP_NAME", defaultAppName),
+		headerOverrides: opts.HeaderOverrides,
 	}
 	p.CompatibleProvider = openai.NewCompatibleProvider(cfg.APIKey, opts, openai.CompatibleProviderConfig{
 		ProviderName: "openrouter",
@@ -65,14 +67,33 @@ func (p *Provider) mutateRequest(req *llmclient.Request) {
 	if req.Headers == nil {
 		req.Headers = make(http.Header)
 	}
-	if strings.TrimSpace(headerValue(req.Headers, "HTTP-Referer")) == "" && strings.TrimSpace(p.siteURL) != "" {
+	// Only apply env identity headers when no static override exists for that header.
+	if !p.hasStaticOverride("HTTP-Referer") &&
+		strings.TrimSpace(headerValue(req.Headers, "HTTP-Referer")) == "" &&
+		strings.TrimSpace(p.siteURL) != "" {
 		req.Headers.Set("HTTP-Referer", p.siteURL)
 	}
-	if strings.TrimSpace(headerValue(req.Headers, "X-OpenRouter-Title")) == "" &&
+	if !p.hasStaticOverride("X-OpenRouter-Title") &&
+		!p.hasStaticOverride("X-Title") &&
+		strings.TrimSpace(headerValue(req.Headers, "X-OpenRouter-Title")) == "" &&
 		strings.TrimSpace(headerValue(req.Headers, "X-Title")) == "" &&
 		strings.TrimSpace(p.appName) != "" {
 		req.Headers.Set("X-OpenRouter-Title", p.appName)
 	}
+}
+
+// hasStaticOverride reports whether static header overrides contain the given header name.
+func (p *Provider) hasStaticOverride(name string) bool {
+	if len(p.headerOverrides.CustomUpstreamHeaders) == 0 {
+		return false
+	}
+	lower := strings.ToLower(strings.TrimSpace(name))
+	for key := range p.headerOverrides.CustomUpstreamHeaders {
+		if strings.ToLower(strings.TrimSpace(key)) == lower {
+			return true
+		}
+	}
+	return false
 }
 
 func setHeaders(req *http.Request, apiKey string) {
