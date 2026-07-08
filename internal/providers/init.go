@@ -31,6 +31,11 @@ type InitResult struct {
 	// map (same keys as Router). Keys match top-level providers YAML names.
 	CredentialResolvedProviders map[string]config.RawProviderConfig
 
+	// AnyPassthroughUserHeaders is true when at least one configured provider has
+	// header_overrides.passthrough_user_headers enabled. It signals to the server
+	// that incoming request headers should be captured for upstream forwarding.
+	AnyPassthroughUserHeaders bool
+
 	// stopRefresh is called to stop the background refresh goroutine
 	stopRefresh func()
 
@@ -80,7 +85,10 @@ func Init(ctx context.Context, result *config.LoadResult, factory *ProviderFacto
 		ctx = context.Background()
 	}
 
-	providerMap, credentialResolved := resolveProviders(result.RawProviders, result.Config.Resilience, factory.discoveryConfigsSnapshot())
+	providerMap, credentialResolved, err := resolveProviders(result.RawProviders, result.Config.Resilience, factory.discoveryConfigsSnapshot())
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve providers: %w", err)
+	}
 	if skipped := skippedProviderNames(result.RawProviders, credentialResolved); len(skipped) > 0 {
 		slog.Info("configured providers skipped: credentials or base_url did not resolve",
 			"providers", skipped)
@@ -95,7 +103,7 @@ func Init(ctx context.Context, result *config.LoadResult, factory *ProviderFacto
 	registry.SetCache(modelCache)
 	registry.SetConfiguredProviderModelsMode(result.Config.Models.ConfiguredProviderModelsMode)
 
-	count, err := initializeProviders(ctx, providerMap, factory, registry)
+	count, anyPassthroughUserHeaders, err := initializeProviders(ctx, providerMap, factory, registry)
 	if err != nil {
 		modelCache.Close()
 		return nil, err
@@ -166,6 +174,7 @@ func Init(ctx context.Context, result *config.LoadResult, factory *ProviderFacto
 		Cache:                       modelCache,
 		Factory:                     factory,
 		CredentialResolvedProviders: credentialResolved,
+		AnyPassthroughUserHeaders:   anyPassthroughUserHeaders,
 		stopRefresh:                 stopRefresh,
 	}, nil
 }
@@ -207,8 +216,9 @@ func initCache(cfg *config.Config) (modelcache.Cache, error) {
 }
 
 // initializeProviders instantiates and registers all resolved providers.
-// Returns the count of successfully registered providers.
-func initializeProviders(ctx context.Context, providerMap map[string]ProviderConfig, factory *ProviderFactory, registry *ModelRegistry) (int, error) {
+// Returns the count of successfully registered providers and a flag indicating
+// whether any configured provider has passthrough user headers enabled.
+func initializeProviders(ctx context.Context, providerMap map[string]ProviderConfig, factory *ProviderFactory, registry *ModelRegistry) (int, bool, error) {
 	// Sort provider names for deterministic initialization order
 	names := make([]string, 0, len(providerMap))
 	for name := range providerMap {
@@ -217,8 +227,12 @@ func initializeProviders(ctx context.Context, providerMap map[string]ProviderCon
 	sort.Strings(names)
 
 	var count int
+	var anyPassthroughUserHeaders bool
 	for _, name := range names {
 		pCfg := providerMap[name]
+		if pCfg.HeaderOverrides.PassthroughUserHeaders {
+			anyPassthroughUserHeaders = true
+		}
 		p, err := factory.Create(pCfg)
 		if err != nil {
 			slog.Error("failed to initialize provider",
@@ -255,5 +269,5 @@ func initializeProviders(ctx context.Context, providerMap map[string]ProviderCon
 		slog.Info("provider registered", "name", name, "type", pCfg.Type)
 	}
 
-	return count, nil
+	return count, anyPassthroughUserHeaders, nil
 }

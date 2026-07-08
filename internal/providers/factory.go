@@ -13,9 +13,11 @@ import (
 
 // ProviderOptions bundles runtime settings passed from the factory to provider constructors.
 type ProviderOptions struct {
-	Hooks      llmclient.Hooks
-	Models     []string
-	Resilience config.ResilienceConfig
+	Hooks           llmclient.Hooks
+	Models          []string
+	Resilience      config.ResilienceConfig
+	HeaderOverrides HeaderOverridesConfig
+	UserPathHeader  string
 }
 
 // ProviderConstructor is the constructor signature for providers.
@@ -46,6 +48,7 @@ type ProviderFactory struct {
 	discoveryConfigs     map[string]DiscoveryConfig
 	passthroughEnrichers map[string]core.PassthroughSemanticEnricher
 	hooks                llmclient.Hooks
+	userPathHeader       string
 }
 
 // NewProviderFactory creates a new provider factory instance.
@@ -62,6 +65,14 @@ func (f *ProviderFactory) SetHooks(hooks llmclient.Hooks) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.hooks = hooks
+}
+
+// SetUserPathHeader configures the default user-path header name for all
+// providers created by this factory. Per-provider UserPathAlias overrides it.
+func (f *ProviderFactory) SetUserPathHeader(header string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.userPathHeader = core.UserPathHeaderName(header)
 }
 
 // Add adds a provider constructor to the factory.
@@ -90,19 +101,33 @@ func (f *ProviderFactory) Create(cfg ProviderConfig) (core.Provider, error) {
 	f.mu.RLock()
 	builder, ok := f.builders[cfg.Type]
 	hooks := f.hooks
+	userPathHeader := f.userPathHeader
 	f.mu.RUnlock()
 
 	if !ok {
 		return nil, fmt.Errorf("unknown provider type: %s", cfg.Type)
 	}
 
+	userPathHeader = effectiveUserPathHeader(cfg.UserPathAlias, userPathHeader)
+
 	opts := ProviderOptions{
-		Hooks:      hooks,
-		Models:     cfg.Models,
-		Resilience: cfg.Resilience,
+		Hooks:           hooks,
+		Models:          cfg.Models,
+		Resilience:      cfg.Resilience,
+		HeaderOverrides: cfg.HeaderOverrides,
+		UserPathHeader:  userPathHeader,
 	}
 
 	return builder(cfg, opts), nil
+}
+
+// effectiveUserPathHeader returns the per-provider alias when configured,
+// otherwise the factory-wide default.
+func effectiveUserPathHeader(alias, factoryDefault string) string {
+	if alias != "" {
+		return core.UserPathHeaderName(alias)
+	}
+	return factoryDefault
 }
 
 // discoveryConfigsSnapshot returns provider discovery metadata keyed by provider type.
