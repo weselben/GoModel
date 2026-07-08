@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -410,5 +411,43 @@ func TestInitializeProviders_AnyPassthroughUserHeaders(t *testing.T) {
 	}
 	if anyPassthrough2 {
 		t.Fatal("initializeProviders() anyPassthrough = true, want false")
+	}
+}
+
+func TestInit_PropagateInvalidHeaderOverridesSkipMode(t *testing.T) {
+	ctx := t.Context()
+
+	factory := NewProviderFactory()
+	factory.Add(Registration{
+		Type: "test",
+		New: func(ProviderConfig, ProviderOptions) core.Provider {
+			return &initTestProvider{}
+		},
+	})
+
+	_, err := Init(ctx, &config.LoadResult{
+		Config: &config.Config{
+			Cache: config.CacheConfig{
+				Model: config.ModelCacheConfig{
+					RefreshInterval: 1,
+					Local: &config.LocalCacheConfig{
+						CacheDir: t.TempDir(),
+					},
+				},
+			},
+		},
+		RawProviders: map[string]config.RawProviderConfig{
+			"test": {
+				Type:                           "test",
+				APIKey:                         "sk-test",
+				PassthroughUserHeadersSkipMode: "invalid",
+			},
+		},
+	}, factory)
+	if err == nil {
+		t.Fatal("Init() error = nil, want error for invalid passthrough_user_headers_skip_mode")
+	}
+	if !strings.Contains(err.Error(), "failed to resolve providers") {
+		t.Errorf("Init() error = %v, want it to wrap provider resolution error", err)
 	}
 }
