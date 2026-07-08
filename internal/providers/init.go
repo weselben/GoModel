@@ -89,6 +89,13 @@ func Init(ctx context.Context, result *config.LoadResult, factory *ProviderFacto
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve providers: %w", err)
 	}
+	fromFile, fromEnv := providerOrigins(result.RawProviders, providerMap)
+	slog.Info("providers resolved",
+		"total", len(providerMap),
+		"from_config_file", len(fromFile),
+		"from_env", len(fromEnv),
+		"config_file_providers", fromFile,
+		"env_providers", fromEnv)
 	if skipped := skippedProviderNames(result.RawProviders, credentialResolved); len(skipped) > 0 {
 		slog.Info("configured providers skipped: credentials or base_url did not resolve",
 			"providers", skipped)
