@@ -382,9 +382,11 @@ func TestApplyHeaderOverrides_PassthroughMode_BlockedHeadersNeverForwarded(t *te
 }
 
 func TestApplyHeaderOverrides_PassthroughMode_TaggingStripHeaders(t *testing.T) {
+	// TaggingStripHeadersFromContext stores canonical header names, so the strip
+	// set must use canonical keys to match real-world usage.
 	strip := map[string]struct{}{
-		"x-tenant-id": {},
-		"x-label":     {},
+		"X-Tenant-Id": {},
+		"X-Label":     {},
 	}
 
 	src := http.Header{

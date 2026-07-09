@@ -420,3 +420,25 @@ func TestCompatibleProvider_DefaultHeaders_RespectOperatorOverridesFromOpts(t *t
 		t.Fatalf("X-Provider-Only = %q, want empty because operator DefaultHeaders replace provider defaults", got)
 	}
 }
+
+func TestCompatibleProvider_buildHeaderMutator_PreservesOperatorDefaultHeaders(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/models", nil)
+	cfg := CompatibleProviderConfig{
+		ProviderName: "direct-test",
+		DefaultHeaders: map[string]string{
+			"X-Default": "provider",
+		},
+		HeaderOverrides: providers.HeaderOverridesConfig{
+			DefaultHeaders: map[string]string{
+				"X-Default": "operator",
+			},
+		},
+	}
+
+	mutator := buildHeaderMutator(cfg, providers.NewKeyring("key"))
+	mutator(req)
+
+	if got := req.Header.Get("X-Default"); got != "operator" {
+		t.Fatalf("X-Default = %q, want operator (operator DefaultHeaders must take precedence)", got)
+	}
+}

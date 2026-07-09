@@ -204,8 +204,10 @@ func shouldForward(name string, skipSet map[string]bool, mode string, userPathAl
 	}
 
 	// Tagging "do not pass" headers are treated as blocked (Santiago #2).
+	// Strip keys are stored canonically (see TaggingStripHeadersFromContext),
+	// so look up the canonical form of the header name.
 	if stripSet != nil {
-		if _, blocked := stripSet[lower]; blocked {
+		if _, blocked := stripSet[http.CanonicalHeaderKey(name)]; blocked {
 			return false
 		}
 	}
