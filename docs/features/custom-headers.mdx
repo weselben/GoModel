@@ -9,6 +9,10 @@ icon: "arrow-right-left"
 GoModel can forward client headers to upstream providers, strip headers you do not
 want to send upstream, and inject fixed headers for every request to a provider.
 
+This page describes the configuration fields, the header precedence rules, and how
+the feature interacts with provider-specific default headers such as OpenRouter's
+identity attribution headers.
+
 ## Configuration
 
 ```yaml
@@ -17,7 +21,7 @@ providers:
     type: openrouter
     api_key: ${OPENROUTER_API_KEY}
     passthrough_user_headers: true
-    passthrough_user_headers_skip_mode: allow
+    passthrough_user_headers_skip_mode: skip
     passthrough_user_headers_skip:
       - "X-Internal-Trace"
     custom_upstream_headers:
@@ -29,16 +33,16 @@ providers:
 
 | Field | Type | Description |
 |---|---|---|
-| `passthrough_user_headers` | boolean | When `true`, client headers that are not skipped are forwarded upstream. |
+| `passthrough_user_headers` | boolean | When `true`, client headers that are not skipped are forwarded upstream. Defaults to `false`. |
 | `passthrough_user_headers_skip_mode` | `skip` \| `allow` | In `skip` mode, the listed headers are dropped. In `allow` mode, only the listed headers are forwarded. |
 | `passthrough_user_headers_skip` | list of strings | Header names acted on by `passthrough_user_headers_skip_mode`. Case-insensitive. |
 | `custom_upstream_headers` | map of strings | Headers injected on every request to this provider. Values support `${ENV_VAR}` substitution. |
 
 <Warning>
-  `passthrough_user_headers` defaults to `false`; when it is `false`, no user headers
-  are forwarded. When `passthrough_user_headers` is `true` and `passthrough_user_headers_skip_mode` is `skip`
-  or `""` (default), an empty `passthrough_user_headers_skip` list forwards all user headers except the
-  hard-coded blocklist. When `passthrough_user_headers` is `true` and `passthrough_user_headers_skip_mode` is
+  When `passthrough_user_headers` is `false`, no user headers are forwarded.
+  When it is `true` and `passthrough_user_headers_skip_mode` is `skip` or empty,
+  an empty `passthrough_user_headers_skip` list forwards all user headers except the
+  hard-coded blocklist. When it is `true` and `passthrough_user_headers_skip_mode` is
   `allow`, an empty `passthrough_user_headers_skip` list forwards no user headers.
 </Warning>
 
@@ -48,33 +52,81 @@ providers:
   attempting to override these headers has no effect.
 </Warning>
 
-## Header Hierarchy and Precedence
+## Header hierarchy and precedence
 
-For each request, headers are applied in this order (lowest to highest priority — later sources win):
+For each upstream request, headers are applied in four layers. Later layers override
+earlier layers for the same header name.
 
-1. **Auth `SetHeaders`** — credentials and auth tokens injected by the provider adapter
-2. **Provider default headers** — values the provider requires GoModel to send (for example, the OpenRouter identity headers). These are resolved per provider from the runtime environment, not from `config.yaml`, and are not user-configurable.
-3. **Static `custom_upstream_headers`** — fixed headers injected from `config.yaml` (or the matching `<PROVIDER>_CUSTOM_UPSTREAM_HEADERS` env var)
-4. **`passthrough_user_headers`** — client-supplied headers forwarded on top
+| Order | Layer | Source | Can it be overridden? |
+|---|---|---|---|
+| 1 | Auth headers | Injected by the provider adapter, for example `Authorization: Bearer …` | No |
+| 2 | Provider default headers | Values the provider requires GoModel to send, such as OpenRouter's `HTTP-Referer` and `X-OpenRouter-Title` | Yes, by layer 3 or 4 |
+| 3 | Static `custom_upstream_headers` | Fixed headers from `config.yaml` or the matching `<PROVIDER>_CUSTOM_UPSTREAM_HEADERS` env var | Yes, by layer 4 |
+| 4 | Passthrough user headers | Client-supplied headers forwarded when `passthrough_user_headers: true` | Highest priority |
 
-When the same header name appears at multiple layers, the later (higher-priority) source wins:
+A later layer always wins for the same header name. For example:
 
-- Provider default for `HTTP-Referer` → default value sent upstream
-- Static `custom_upstream_headers` for `HTTP-Referer` → static value overrides the provider default
-- Caller passthrough header for `HTTP-Referer` → caller value overrides the static one and the default
+- A provider default `HTTP-Referer` is sent unless `custom_upstream_headers` also sets `HTTP-Referer`.
+- A static `HTTP-Referer` is sent unless the caller also passes `HTTP-Referer` through with `passthrough_user_headers: true`.
 
-Provider defaults sit in their own layer and are **not** exposed as a `config.yaml` field. They are resolved per provider (typically from env vars) and merged in between auth and your static headers, so you can still override them with `custom_upstream_headers` or a caller passthrough header when needed.
+## Provider default headers
 
-## Hard-Blocked Headers
+Some providers ship with default headers that GoModel attaches automatically. These
+defaults are resolved at provider construction time and are not exposed as a
+`config.yaml` field. They sit between auth headers and your static custom headers,
+so you can override them with `custom_upstream_headers` or caller passthrough headers.
+
+### OpenRouter
+
+OpenRouter uses two identity headers to attribute traffic on the OpenRouter dashboard:
+
+| Env var | Upstream header | Purpose |
+|---|---|---|
+| `OPENROUTER_SITE_URL` | `HTTP-Referer` | App URL shown in the OpenRouter dashboard |
+| `OPENROUTER_APP_NAME` | `X-OpenRouter-Title` | App name shown in the OpenRouter dashboard |
+
+GoModel reads these env vars and attaches them as provider default headers. They are
+not configurable through `config.yaml`; they are only set from the runtime environment.
+
+<Note>
+  OpenRouter also accepts `X-Title` from callers, but the dashboard app name is
+  driven by `X-OpenRouter-Title`. Use `X-OpenRouter-Title` when you want to
+  override the displayed app name.
+</Note>
+
+### Skip-list behavior with provider defaults
+
+The `passthrough_user_headers_skip` list only filters **caller** headers. It does not
+strip provider default headers. If a caller sends a header that matches a provider
+default (for example, `HTTP-Referer`), and that header name is listed in
+`passthrough_user_headers_skip`, the caller's value is dropped but the provider's
+default value is still attached.
+
+To replace a provider default, set it explicitly in `custom_upstream_headers`. To let
+a caller replace it, do not list it in `passthrough_user_headers_skip` and enable
+`passthrough_user_headers: true`.
+
+### Concrete scenarios for OpenRouter
+
+| Scenario | `HTTP-Referer` sent upstream | `X-OpenRouter-Title` sent upstream |
+|---|---|---|
+| Only `OPENROUTER_SITE_URL` set | `OPENROUTER_SITE_URL` value | — |
+| Only `OPENROUTER_APP_NAME` set | — | `OPENROUTER_APP_NAME` value |
+| Both env vars set | `OPENROUTER_SITE_URL` value | `OPENROUTER_APP_NAME` value |
+| Both env vars set, plus `custom_upstream_headers` with `X-OpenRouter-Title: MyApp` | `OPENROUTER_SITE_URL` value | `MyApp` |
+| All of the above, plus caller sends `X-OpenRouter-Title: CallerApp` | `OPENROUTER_SITE_URL` value | `CallerApp` |
+| Both env vars set, caller sends `HTTP-Referer`, and the name is in `passthrough_user_headers_skip` (skip mode) | `OPENROUTER_SITE_URL` value | `OPENROUTER_APP_NAME` value |
+
+## Hard-blocked headers
 
 The following headers are **never forwarded**, even if listed in `custom_upstream_headers` or `passthrough_user_headers`:
 
 - `authorization`, `proxy-authorization`, `cookie`, `set-cookie`
 - `x-api-key`, `api-key`, `x-goog-api-key`, `x-auth-token`, `x-access-token`, `x-gomodel-key`
 - `X-GoModel-User-Path` and the configured user-path header alias
-- Transport/hop-by-hop: `Accept-Encoding`, `Connection`, `Keep-Alive`, `TE`, `Transfer-Encoding`, `Trailer`, `Upgrade`, `Content-Length`, `Host`
+- Transport/hop-by-hop headers: `Accept-Encoding`, `Connection`, `Keep-Alive`, `TE`, `Transfer-Encoding`, `Trailer`, `Upgrade`, `Content-Length`, `Host`
 
-## Environment Variable Overrides
+## Environment variable overrides
 
 Per-provider env vars override the corresponding `config.yaml` values:
 
@@ -88,13 +140,9 @@ Per-provider env vars override the corresponding `config.yaml` values:
 Examples:
 
 ```bash
-# OpenAI
-OPENAI_CUSTOM_UPSTREAM_HEADERS="X-Title=MyApp, User-Agent=MyApp/1.0.0"
-OPENAI_PASSTHROUGH_USER_HEADERS_SKIP="X-Internal-Trace, X-Debug"
-
-# OpenRouter (inherits OpenAI-compatible CompatibleProvider behavior)
-OPENROUTER_CUSTOM_UPSTREAM_HEADERS="X-Title=MyApp"
+OPENROUTER_CUSTOM_UPSTREAM_HEADERS="X-OpenRouter-Title=MyApp, User-Agent=MyApp/1.0.0"
 OPENROUTER_PASSTHROUGH_USER_HEADERS=true
+OPENROUTER_PASSTHROUGH_USER_HEADERS_SKIP="X-Internal-Trace"
 ```
 
 Whitespace around entries is ignored.
@@ -103,7 +151,7 @@ Whitespace around entries is ignored.
 
 ### Skip mode
 
-Drop the listed headers. When `passthrough_user_headers: true` and `passthrough_user_headers_skip` is
+Drop the listed headers. When `passthrough_user_headers: true` and the skip list is
 empty, all user headers except the hard-coded blocklist are forwarded.
 
 ```yaml
@@ -117,13 +165,13 @@ providers:
       - "X-Internal-Trace"
       - "X-Debug"
     custom_upstream_headers:
-        User-Agent: "MyApp/1.0.0"
+      User-Agent: "MyApp/1.0.0"
 ```
 
 ### Allow mode
 
-Only forward headers that appear in `passthrough_user_headers_skip`. Use this when you want an
-explicit allowlist. When `passthrough_user_headers_skip` is empty, no user headers are forwarded.
+Only forward headers that appear in the skip list. Use this when you want an explicit
+allowlist. When the skip list is empty, no user headers are forwarded.
 
 ```yaml
 providers:
@@ -136,55 +184,11 @@ providers:
       - "X-Title"
       - "User-Agent"
     custom_upstream_headers:
-        X-Title: "MyApp"
-        User-Agent: "MyApp/1.0.0"
+      X-Title: "MyApp"
+      User-Agent: "MyApp/1.0.0"
 ```
 
-## OpenRouter Identity Headers
-
-OpenRouter uses `HTTP-Referer` and `X-OpenRouter-Title` to attribute your app on
-their site. When targeting an `openrouter` provider, GoModel resolves these as
-**provider default headers** from env vars:
-
-| Env var | Upstream header |
-|---|---|
-| `OPENROUTER_SITE_URL` | `HTTP-Referer` |
-| `OPENROUTER_APP_NAME` | `X-OpenRouter-Title` |
-
-These defaults are not a `config.yaml` field. They are resolved per provider from
-the runtime environment and merged in at the **provider defaults** layer of the
-header hierarchy, which sits between auth `SetHeaders` and your static
-`custom_upstream_headers`.
-
-Precedence at runtime (lowest to highest — later sources win):
-
-1. Auth `SetHeaders` (e.g. `Authorization: Bearer …`)
-2. Provider defaults: `OPENROUTER_SITE_URL` / `OPENROUTER_APP_NAME` populate `HTTP-Referer` / `X-OpenRouter-Title`
-3. Static `custom_upstream_headers` in `config.yaml` override the provider default
-4. Caller passthrough headers (via `passthrough_user_headers: true`) override both
-
-### Skip-list protection of provider defaults
-
-The `passthrough_user_headers_skip` list (in either `skip` or `allow` mode) only
-filters **caller** headers — it does not strip provider defaults. If a caller
-sends a header name that matches a default (for example, an inbound
-`HTTP-Referer` listed in `passthrough_user_headers_skip`), the provider default
-value is still attached to the upstream request. To replace a provider default,
-set it explicitly in `custom_upstream_headers`; to remove it, you must not
-configure it via env vars and there is no opt-out flag.
-
-### Concrete scenarios
-
-| Scenario | `HTTP-Referer` sent upstream | `X-OpenRouter-Title` sent upstream |
-|---|---|---|
-| Only `OPENROUTER_SITE_URL` set | `OPENROUTER_SITE_URL` value | — (not set, no default to send) |
-| Only `OPENROUTER_APP_NAME` set | — (not set, no default to send) | `OPENROUTER_APP_NAME` value |
-| Both `OPENROUTER_SITE_URL` and `OPENROUTER_APP_NAME` set | `OPENROUTER_SITE_URL` value | `OPENROUTER_APP_NAME` value |
-| Both env vars set, plus `custom_upstream_headers` for `X-OpenRouter-Title: MyApp` | `OPENROUTER_SITE_URL` value | `MyApp` (static wins over default) |
-| All three above, plus caller sends `X-OpenRouter-Title: CallerApp` | `OPENROUTER_SITE_URL` value | `CallerApp` (caller wins over static and default) |
-| Both env vars set, caller sends `HTTP-Referer` and the name is listed in `passthrough_user_headers_skip` (skip mode) | `OPENROUTER_SITE_URL` value (default is preserved; skip list only filters caller input) | `OPENROUTER_APP_NAME` value |
-
-## Limitations
+## Supported providers
 
 Header overrides apply only to providers that use the OpenAI-compatible
 `CompatibleProvider` adapter:
@@ -208,5 +212,5 @@ Header overrides apply only to providers that use the OpenAI-compatible
 
 The feature does **not** apply to `anthropic`, `gemini`, `vertex`, or `bedrock`
 providers because they use provider-specific adapters rather than the
-OpenAI-compatible path. Prose references to those providers in examples is fine,
-but configuration of these header fields under those provider blocks is ignored.
+OpenAI-compatible path. Configuration of these header fields under those provider
+blocks is ignored.
