@@ -318,3 +318,105 @@ func TestCompatibleProvider_NewCompatibleProvider_PropagatesOverridesFromOpts(t 
 		t.Fatalf("X-Custom-Override = %q, want from-opts", got)
 	}
 }
+
+func TestCompatibleProvider_buildHeaderMutator_DefaultHeaders(t *testing.T) {
+	tests := []struct {
+		name           string
+		defaultHeaders map[string]string
+		overrides      providers.HeaderOverridesConfig
+		wantDefault    string
+		wantOverride   string
+	}{
+		{
+			name:           "applies provider default headers when overrides default empty",
+			defaultHeaders: map[string]string{"X-Provider-Default": "from-provider"},
+			overrides:      providers.HeaderOverridesConfig{},
+			wantDefault:    "from-provider",
+			wantOverride:   "",
+		},
+		{
+			name:           "skips provider default headers when overrides default already set",
+			defaultHeaders: map[string]string{"X-Provider-Default": "from-provider"},
+			overrides: providers.HeaderOverridesConfig{
+				DefaultHeaders: map[string]string{"X-Override-Default": "from-override"},
+			},
+			wantDefault:  "",
+			wantOverride: "from-override",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var seenHeaders http.Header
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				seenHeaders = r.Header.Clone()
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"object":"list","data":[]}`))
+			}))
+			defer server.Close()
+
+			provider := NewCompatibleProviderWithHTTPClient(
+				"test-key",
+				server.Client(),
+				llmclient.Hooks{},
+				CompatibleProviderConfig{
+					ProviderName:    "default-header-test",
+					BaseURL:         server.URL,
+					DefaultHeaders:  tt.defaultHeaders,
+					HeaderOverrides: tt.overrides,
+				},
+			)
+
+			if _, err := provider.ListModels(context.Background()); err != nil {
+				t.Fatalf("ListModels() error = %v", err)
+			}
+
+			if got := seenHeaders.Get("X-Provider-Default"); got != tt.wantDefault {
+				t.Fatalf("X-Provider-Default = %q, want %q", got, tt.wantDefault)
+			}
+			if got := seenHeaders.Get("X-Override-Default"); got != tt.wantOverride {
+				t.Fatalf("X-Override-Default = %q, want %q", got, tt.wantOverride)
+			}
+		})
+	}
+}
+
+func TestCompatibleProvider_DefaultHeaders_RespectOperatorOverridesFromOpts(t *testing.T) {
+	var seenHeaders http.Header
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenHeaders = r.Header.Clone()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"object":"list","data":[]}`))
+	}))
+	defer server.Close()
+
+	provider := NewCompatibleProvider(
+		"test-key",
+		providers.ProviderOptions{
+			HeaderOverrides: providers.HeaderOverridesConfig{
+				DefaultHeaders: map[string]string{
+					"X-Operator-Default": "from-operator",
+				},
+			},
+		},
+		CompatibleProviderConfig{
+			ProviderName: "default-precedence-test",
+			BaseURL:      server.URL,
+			DefaultHeaders: map[string]string{
+				"X-Operator-Default": "from-provider",
+				"X-Provider-Only":    "from-provider",
+			},
+		},
+	)
+
+	if _, err := provider.ListModels(context.Background()); err != nil {
+		t.Fatalf("ListModels() error = %v", err)
+	}
+
+	if got := seenHeaders.Get("X-Operator-Default"); got != "from-operator" {
+		t.Fatalf("X-Operator-Default = %q, want from-operator", got)
+	}
+	if got := seenHeaders.Get("X-Provider-Only"); got != "" {
+		t.Fatalf("X-Provider-Only = %q, want empty because operator DefaultHeaders replace provider defaults", got)
+	}
+}

@@ -110,8 +110,8 @@ a caller replace it, do not list it in `passthrough_user_headers_skip` and enabl
 
 | Scenario | `HTTP-Referer` sent upstream | `X-OpenRouter-Title` sent upstream |
 |---|---|---|
-| Only `OPENROUTER_SITE_URL` set | `OPENROUTER_SITE_URL` value | — |
-| Only `OPENROUTER_APP_NAME` set | — | `OPENROUTER_APP_NAME` value |
+| Only `OPENROUTER_SITE_URL` set | `OPENROUTER_SITE_URL` value | `GoModel` (default app name) |
+| Only `OPENROUTER_APP_NAME` set | `https://gomodel.enterpilot.io` (default site URL) | `OPENROUTER_APP_NAME` value |
 | Both env vars set | `OPENROUTER_SITE_URL` value | `OPENROUTER_APP_NAME` value |
 | Both env vars set, plus `custom_upstream_headers` with `X-OpenRouter-Title: MyApp` | `OPENROUTER_SITE_URL` value | `MyApp` |
 | All of the above, plus caller sends `X-OpenRouter-Title: CallerApp` | `OPENROUTER_SITE_URL` value | `CallerApp` |

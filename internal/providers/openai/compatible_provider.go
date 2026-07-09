@@ -93,8 +93,6 @@ func NewCompatibleProvider(apiKey string, opts providers.ProviderOptions, cfg Co
 		Hooks:          opts.Hooks,
 		CircuitBreaker: opts.Resilience.CircuitBreaker,
 	}
-	// Resolved per request, not captured: with several keys configured this is
-	// what spreads successive calls across them.
 	cfg.HeaderOverrides = opts.HeaderOverrides
 	cfg.UserPathAlias = opts.UserPathHeader
 	p.client = llmclient.New(clientCfg, buildHeaderMutator(cfg, p.keys))
@@ -123,6 +121,8 @@ func NewCompatibleProviderWithHTTPClient(apiKey string, httpClient *http.Client,
 // mutation used by both CompatibleProvider constructors.
 func buildHeaderMutator(cfg CompatibleProviderConfig, keys *providers.Keyring) func(*http.Request) {
 	return func(req *http.Request) {
+		// keys.Next() is resolved per request so that successive calls spread
+		// across multiple configured keys round-robin.
 		if cfg.SetHeaders != nil {
 			cfg.SetHeaders(req, keys.Next())
 		}

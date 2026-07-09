@@ -737,11 +737,11 @@ func TestApplyPassthroughHeaders_Variants(t *testing.T) {
 // provider-agnostic table-driven test that documents the four-layer precedence
 // of ApplyHeaderOverrides once for the entire codebase:
 //
-//	1. defaults:        DefaultHeaders seed baseline values.
-//	2. static:          CustomUpstreamHeaders override default values.
-//	3. passthrough:     when permitted, passthrough user headers override static.
-//	4. blocked/skip:    IsHeaderBlocked skips defaults and statics; shouldForward
-//	                    additionally filters passthrough via SkipHeaders/SkipMode.
+//  1. defaults:        DefaultHeaders seed baseline values.
+//  2. static:          CustomUpstreamHeaders override default values.
+//  3. passthrough:     when permitted, passthrough user headers override static.
+//  4. blocked/skip:    IsHeaderBlocked skips defaults and statics; shouldForward
+//     additionally filters passthrough via SkipHeaders/SkipMode.
 //
 // Each case asserts the final header value (or absence) for every named header
 // so the precedence rules are visible in one place.
@@ -777,13 +777,13 @@ func TestApplyHeaderOverrides_DefaultStaticPassthroughPrecedence(t *testing.T) {
 			name: "static overrides defaults",
 			cfg: HeaderOverridesConfig{
 				DefaultHeaders: map[string]string{
-					"X-Shared": defaultVal,
+					"X-Shared":  defaultVal,
 					"X-Default": defaultVal,
 				},
 				CustomUpstreamHeaders: map[string]string{
-					"X-Shared":  staticVal,
-					"X-Static":  staticVal,
-					"X-Default": defaultVal, // confirm defaults still applied where static leaves them
+					"X-Shared": staticVal,
+					"X-Static": staticVal,
+					// X-Default is only in DefaultHeaders to prove defaults are preserved where static does not override them.
 				},
 			},
 			want: map[string]string{
@@ -847,8 +847,8 @@ func TestApplyHeaderOverrides_DefaultStaticPassthroughPrecedence(t *testing.T) {
 				SkipHeaders: []string{"X-Allowed"},
 			},
 			passthrough: http.Header{
-				"X-Shared":  {passVal}, // not in allow list → blocked from passthrough
-				"X-Allowed": {passVal}, // allowed, but no static/default conflict
+				"X-Shared":  {passVal},   // not in allow list → blocked from passthrough
+				"X-Allowed": {passVal},   // allowed, but no static/default conflict
 				"X-Other":   {otherPass}, // not allowed
 			},
 			want: map[string]string{
