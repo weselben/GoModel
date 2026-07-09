@@ -36,6 +36,11 @@ type CompatibleProviderConfig struct {
 	HeaderOverrides providers.HeaderOverridesConfig
 	// UserPathAlias is the configured user-path header alias for this provider.
 	UserPathAlias string
+	// DefaultHeaders are baseline headers applied via ApplyHeaderOverrides
+	// after SetHeaders and before static custom headers / passthrough
+	// overrides. Static overrides default; passthrough (when permitted)
+	// overrides static.
+	DefaultHeaders map[string]string
 }
 
 // CompatibleProvider is the single transport engine for every
@@ -116,7 +121,14 @@ func buildHeaderMutator(cfg CompatibleProviderConfig, apiKey string) func(*http.
 		if cfg.SetHeaders != nil {
 			cfg.SetHeaders(req, apiKey)
 		}
-		providers.ApplyHeaderOverrides(req, cfg.HeaderOverrides, cfg.UserPathAlias)
+		// Surface provider-level default headers via HeaderOverrides so
+		// ApplyHeaderOverrides applies them in canonical order:
+		// SetHeaders → DefaultHeaders → static → passthrough.
+		overrides := cfg.HeaderOverrides
+		if len(cfg.DefaultHeaders) > 0 && len(overrides.DefaultHeaders) == 0 {
+			overrides.DefaultHeaders = cfg.DefaultHeaders
+		}
+		providers.ApplyHeaderOverrides(req, overrides, cfg.UserPathAlias)
 	}
 }
 

@@ -22,6 +22,12 @@ type HeaderOverridesConfig struct {
 
 	// SkipMode determines how SkipHeaders works: "skip" or "allow".
 	SkipMode string
+
+	// DefaultHeaders are baseline headers applied after provider SetHeaders
+	// and before static custom headers / passthrough overrides. Static
+	// overrides default values; passthrough (when permitted) overrides static.
+	// Blocked names are skipped.
+	DefaultHeaders map[string]string
 }
 
 // passthroughCtxKey is the context key for storing passthrough headers.
@@ -87,9 +93,14 @@ func FilterIncomingHeaders(headers http.Header, userPathAlias string) http.Heade
 }
 
 // ApplyHeaderOverrides applies header overrides to the request.
-// Composes static headers first, then passthrough headers; passthrough wins
-// on conflict. Logs a warning when both are configured and overlap.
+// Composes default headers first, then static headers, then passthrough;
+// passthrough wins on conflict. Logs a warning when static and passthrough
+// are both configured and overlap.
 func ApplyHeaderOverrides(req *http.Request, cfg HeaderOverridesConfig, userPathAlias string) {
+	if len(cfg.DefaultHeaders) > 0 {
+		applyDefaultHeaders(req, cfg.DefaultHeaders, userPathAlias)
+	}
+
 	if len(cfg.CustomUpstreamHeaders) > 0 {
 		applyStaticHeaders(req, cfg.CustomUpstreamHeaders, userPathAlias)
 	}
@@ -161,6 +172,18 @@ func applyPassthroughHeaders(req *http.Request, cfg HeaderOverridesConfig, userP
 
 // applyStaticHeaders adds static custom headers to request, skipping blocked names.
 func applyStaticHeaders(req *http.Request, headers map[string]string, userPathAlias string) {
+	for name, value := range headers {
+		if !IsHeaderBlocked(name, userPathAlias) {
+			req.Header.Set(name, value)
+		}
+	}
+}
+
+// applyDefaultHeaders seeds baseline headers on the request after provider
+// SetHeaders have run and before static custom headers apply. Blocked names
+// (credentials, transport, configured user-path alias) are skipped so defaults
+// cannot leak protected values upstream.
+func applyDefaultHeaders(req *http.Request, headers map[string]string, userPathAlias string) {
 	for name, value := range headers {
 		if !IsHeaderBlocked(name, userPathAlias) {
 			req.Header.Set(name, value)

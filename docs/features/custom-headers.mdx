@@ -50,15 +50,20 @@ providers:
 
 ## Header Hierarchy and Precedence
 
-For each request, headers are applied in this order:
+For each request, headers are applied in this order (lowest to highest priority — later sources win):
 
-1. **Static `custom_upstream_headers`** — injected first, from `config.yaml`
-2. **`passthrough_user_headers`** — client-supplied headers forwarded on top
+1. **Auth `SetHeaders`** — credentials and auth tokens injected by the provider adapter
+2. **Provider default headers** — values the provider requires GoModel to send (for example, the OpenRouter identity headers). These are resolved per provider from the runtime environment, not from `config.yaml`, and are not user-configurable.
+3. **Static `custom_upstream_headers`** — fixed headers injected from `config.yaml` (or the matching `<PROVIDER>_CUSTOM_UPSTREAM_HEADERS` env var)
+4. **`passthrough_user_headers`** — client-supplied headers forwarded on top
 
-When the same header name appears in both, the later source wins:
+When the same header name appears at multiple layers, the later (higher-priority) source wins:
 
-- Static `custom_upstream_headers` for `X-Title` → `X-Title` sent upstream with that value
-- Caller passthrough header for `X-Title` → caller value overrides the static one
+- Provider default for `HTTP-Referer` → default value sent upstream
+- Static `custom_upstream_headers` for `HTTP-Referer` → static value overrides the provider default
+- Caller passthrough header for `HTTP-Referer` → caller value overrides the static one and the default
+
+Provider defaults sit in their own layer and are **not** exposed as a `config.yaml` field. They are resolved per provider (typically from env vars) and merged in between auth and your static headers, so you can still override them with `custom_upstream_headers` or a caller passthrough header when needed.
 
 ## Hard-Blocked Headers
 
@@ -138,29 +143,46 @@ providers:
 ## OpenRouter Identity Headers
 
 OpenRouter uses `HTTP-Referer` and `X-OpenRouter-Title` to attribute your app on
-their site. GoModel sets these from env vars when targeting an `openrouter` provider:
+their site. When targeting an `openrouter` provider, GoModel resolves these as
+**provider default headers** from env vars:
 
 | Env var | Upstream header |
 |---|---|
 | `OPENROUTER_SITE_URL` | `HTTP-Referer` |
 | `OPENROUTER_APP_NAME` | `X-OpenRouter-Title` |
 
-These are applied as **env-derived static headers**, placed in the same layer as
-`custom_upstream_headers`. Precedence at runtime:
+These defaults are not a `config.yaml` field. They are resolved per provider from
+the runtime environment and merged in at the **provider defaults** layer of the
+header hierarchy, which sits between auth `SetHeaders` and your static
+`custom_upstream_headers`.
 
-1. `OPENROUTER_SITE_URL` / `OPENROUTER_APP_NAME` env vars set a header value
-2. Static `custom_upstream_headers` in `config.yaml` override that value
-3. Caller passthrough headers (via `passthrough_user_headers: true`) override both
+Precedence at runtime (lowest to highest — later sources win):
+
+1. Auth `SetHeaders` (e.g. `Authorization: Bearer …`)
+2. Provider defaults: `OPENROUTER_SITE_URL` / `OPENROUTER_APP_NAME` populate `HTTP-Referer` / `X-OpenRouter-Title`
+3. Static `custom_upstream_headers` in `config.yaml` override the provider default
+4. Caller passthrough headers (via `passthrough_user_headers: true`) override both
+
+### Skip-list protection of provider defaults
+
+The `passthrough_user_headers_skip` list (in either `skip` or `allow` mode) only
+filters **caller** headers — it does not strip provider defaults. If a caller
+sends a header name that matches a default (for example, an inbound
+`HTTP-Referer` listed in `passthrough_user_headers_skip`), the provider default
+value is still attached to the upstream request. To replace a provider default,
+set it explicitly in `custom_upstream_headers`; to remove it, you must not
+configure it via env vars and there is no opt-out flag.
 
 ### Concrete scenarios
 
 | Scenario | `HTTP-Referer` sent upstream | `X-OpenRouter-Title` sent upstream |
 |---|---|---|
-| Only `OPENROUTER_SITE_URL` set | `OPENROUTER_SITE_URL` value | — (blocked) |
-| Only `OPENROUTER_APP_NAME` set | — (blocked) | `OPENROUTER_APP_NAME` value |
+| Only `OPENROUTER_SITE_URL` set | `OPENROUTER_SITE_URL` value | — (not set, no default to send) |
+| Only `OPENROUTER_APP_NAME` set | — (not set, no default to send) | `OPENROUTER_APP_NAME` value |
 | Both `OPENROUTER_SITE_URL` and `OPENROUTER_APP_NAME` set | `OPENROUTER_SITE_URL` value | `OPENROUTER_APP_NAME` value |
-| Both env vars set, plus `custom_upstream_headers` for `X-OpenRouter-Title: MyApp` | `OPENROUTER_SITE_URL` value | `MyApp` (static wins over env) |
-| All three above, plus caller sends `X-OpenRouter-Title: CallerApp` | `OPENROUTER_SITE_URL` value | `CallerApp` (caller wins over static and env) |
+| Both env vars set, plus `custom_upstream_headers` for `X-OpenRouter-Title: MyApp` | `OPENROUTER_SITE_URL` value | `MyApp` (static wins over default) |
+| All three above, plus caller sends `X-OpenRouter-Title: CallerApp` | `OPENROUTER_SITE_URL` value | `CallerApp` (caller wins over static and default) |
+| Both env vars set, caller sends `HTTP-Referer` and the name is listed in `passthrough_user_headers_skip` (skip mode) | `OPENROUTER_SITE_URL` value (default is preserved; skip list only filters caller input) | `OPENROUTER_APP_NAME` value |
 
 ## Limitations
 
