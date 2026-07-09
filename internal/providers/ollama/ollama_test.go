@@ -106,8 +106,8 @@ func TestNew(t *testing.T) {
 	// Use NewWithHTTPClient to get concrete type for internal testing
 	provider := NewWithHTTPClient(apiKey, nil, llmclient.Hooks{})
 
-	if provider.apiKey != apiKey {
-		t.Errorf("apiKey = %q, want %q", provider.apiKey, apiKey)
+	if got := provider.keys.Primary(); got != apiKey {
+		t.Errorf("primary key = %q, want %q", got, apiKey)
 	}
 	if provider.compat == nil {
 		t.Error("compat should not be nil")
@@ -129,8 +129,8 @@ func TestNew_WithoutAPIKey(t *testing.T) {
 	// Ollama doesn't require an API key
 	provider := NewWithHTTPClient("", nil, llmclient.Hooks{})
 
-	if provider.apiKey != "" {
-		t.Errorf("apiKey = %q, want empty", provider.apiKey)
+	if got := provider.keys.Primary(); got != "" {
+		t.Errorf("primary key = %q, want empty", got)
 	}
 	if provider.compat == nil {
 		t.Error("compat should not be nil")
@@ -808,8 +808,8 @@ func TestNewWithHTTPClient(t *testing.T) {
 
 	provider := NewWithHTTPClient(apiKey, customClient, llmclient.Hooks{})
 
-	if provider.apiKey != apiKey {
-		t.Errorf("apiKey = %q, want %q", provider.apiKey, apiKey)
+	if got := provider.keys.Primary(); got != apiKey {
+		t.Errorf("primary key = %q, want %q", got, apiKey)
 	}
 	if provider.compat == nil {
 		t.Error("compat should not be nil")

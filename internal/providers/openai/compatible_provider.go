@@ -67,8 +67,11 @@ type CompatibleProviderConfig struct {
 // AdaptChatRequest, ChatRequestHeaders, RequestMutator), not in copies of
 // the transport methods.
 type CompatibleProvider struct {
-	client             *llmclient.Client
-	apiKey             string
+	client *llmclient.Client
+	// keys resolves the credential for each outbound request. Providers in this
+	// package read it directly (see realtime.go) so a websocket dial picks up
+	// the same rotation as the HTTP endpoints.
+	keys               *providers.Keyring
 	providerName       string
 	requestMutator     RequestMutator
 	adaptChatRequest   func(*core.ChatRequest) (*core.ChatRequest, error)
@@ -77,7 +80,7 @@ type CompatibleProvider struct {
 
 func NewCompatibleProvider(apiKey string, opts providers.ProviderOptions, cfg CompatibleProviderConfig) *CompatibleProvider {
 	p := &CompatibleProvider{
-		apiKey:             apiKey,
+		keys:               opts.Keyring(apiKey),
 		providerName:       cfg.ProviderName,
 		requestMutator:     cfg.RequestMutator,
 		adaptChatRequest:   cfg.AdaptChatRequest,
@@ -90,9 +93,11 @@ func NewCompatibleProvider(apiKey string, opts providers.ProviderOptions, cfg Co
 		Hooks:          opts.Hooks,
 		CircuitBreaker: opts.Resilience.CircuitBreaker,
 	}
+	// Resolved per request, not captured: with several keys configured this is
+	// what spreads successive calls across them.
 	cfg.HeaderOverrides = opts.HeaderOverrides
 	cfg.UserPathAlias = opts.UserPathHeader
-	p.client = llmclient.New(clientCfg, buildHeaderMutator(cfg, apiKey))
+	p.client = llmclient.New(clientCfg, buildHeaderMutator(cfg, p.keys))
 	return p
 }
 
@@ -101,7 +106,7 @@ func NewCompatibleProviderWithHTTPClient(apiKey string, httpClient *http.Client,
 		httpClient = http.DefaultClient
 	}
 	p := &CompatibleProvider{
-		apiKey:             apiKey,
+		keys:               providers.NewKeyring(apiKey),
 		providerName:       cfg.ProviderName,
 		requestMutator:     cfg.RequestMutator,
 		adaptChatRequest:   cfg.AdaptChatRequest,
@@ -109,17 +114,17 @@ func NewCompatibleProviderWithHTTPClient(apiKey string, httpClient *http.Client,
 	}
 	clientCfg := llmclient.DefaultConfig(cfg.ProviderName, cfg.BaseURL)
 	clientCfg.Hooks = hooks
-	p.client = llmclient.NewWithHTTPClient(httpClient, clientCfg, buildHeaderMutator(cfg, apiKey))
+	p.client = llmclient.NewWithHTTPClient(httpClient, clientCfg, buildHeaderMutator(cfg, p.keys))
 	return p
 }
 
 // buildHeaderMutator returns a function that applies provider-specific headers
 // and then header overrides. It is the single source of truth for the header
 // mutation used by both CompatibleProvider constructors.
-func buildHeaderMutator(cfg CompatibleProviderConfig, apiKey string) func(*http.Request) {
+func buildHeaderMutator(cfg CompatibleProviderConfig, keys *providers.Keyring) func(*http.Request) {
 	return func(req *http.Request) {
 		if cfg.SetHeaders != nil {
-			cfg.SetHeaders(req, apiKey)
+			cfg.SetHeaders(req, keys.Next())
 		}
 		// Surface provider-level default headers via HeaderOverrides so
 		// ApplyHeaderOverrides applies them in canonical order:

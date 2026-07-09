@@ -266,6 +266,13 @@ providers:
   openai:
     type: openai
     api_key: "sk-..."
+    # Several keys for one provider rotate round robin, raising the per-key rate
+    # limit. Equivalent env vars: OPENAI_API_KEY_2, OPENAI_API_KEY_3, ...
+    # Caveat: rotation defeats provider prompt caching, since providers scope the
+    # cache to the key that filled it.
+    # api_keys:
+    #   - "${OPENAI_API_KEY_2}"
+    #   - "${OPENAI_API_KEY_3}"
     # Forward or inject custom headers for this provider. See docs/features/custom-headers.mdx
     # for details. Transport headers (Connection, Transfer-Encoding, etc.) are always blocked.
     # passthrough_user_headers: true

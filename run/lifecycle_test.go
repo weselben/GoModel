@@ -3,6 +3,7 @@ package run
 import (
 	"context"
 	"errors"
+	"slices"
 	"io"
 	"sync"
 	"testing"
@@ -183,13 +184,7 @@ func TestMain_KimicodeProviderRegistration(t *testing.T) {
 	factory := defaultProviderFactory(&config.Config{})
 
 	registered := factory.RegisteredTypes()
-	found := false
-	for _, typ := range registered {
-		if typ == "kimicode" {
-			found = true
-			break
-		}
-	}
+	found := slices.Contains(registered, "kimicode")
 	if !found {
 		t.Fatalf("kimicode not in RegisteredTypes() = %v", registered)
 	}
