@@ -732,3 +732,153 @@ func TestApplyPassthroughHeaders_Variants(t *testing.T) {
 		})
 	}
 }
+
+// TestApplyHeaderOverrides_DefaultStaticPassthroughPrecedence is the canonical,
+// provider-agnostic table-driven test that documents the four-layer precedence
+// of ApplyHeaderOverrides once for the entire codebase:
+//
+//	1. defaults:        DefaultHeaders seed baseline values.
+//	2. static:          CustomUpstreamHeaders override default values.
+//	3. passthrough:     when permitted, passthrough user headers override static.
+//	4. blocked/skip:    IsHeaderBlocked skips defaults and statics; shouldForward
+//	                    additionally filters passthrough via SkipHeaders/SkipMode.
+//
+// Each case asserts the final header value (or absence) for every named header
+// so the precedence rules are visible in one place.
+func TestApplyHeaderOverrides_DefaultStaticPassthroughPrecedence(t *testing.T) {
+	const (
+		defaultVal  = "default-val"
+		staticVal   = "static-val"
+		passVal     = "pass-val"
+		otherStatic = "other-static"
+		otherPass   = "other-pass"
+	)
+
+	tests := []struct {
+		name          string
+		cfg           HeaderOverridesConfig
+		userPathAlias string
+		passthrough   http.Header // nil disables passthrough source
+		want          map[string]string
+		wantMissing   []string
+	}{
+		{
+			name: "defaults only",
+			cfg: HeaderOverridesConfig{
+				DefaultHeaders: map[string]string{
+					"X-Default": defaultVal,
+				},
+			},
+			want: map[string]string{
+				"X-Default": defaultVal,
+			},
+		},
+		{
+			name: "static overrides defaults",
+			cfg: HeaderOverridesConfig{
+				DefaultHeaders: map[string]string{
+					"X-Shared": defaultVal,
+					"X-Default": defaultVal,
+				},
+				CustomUpstreamHeaders: map[string]string{
+					"X-Shared":  staticVal,
+					"X-Static":  staticVal,
+					"X-Default": defaultVal, // confirm defaults still applied where static leaves them
+				},
+			},
+			want: map[string]string{
+				"X-Shared":  staticVal,
+				"X-Static":  staticVal,
+				"X-Default": defaultVal,
+			},
+		},
+		{
+			name: "passthrough overrides static and defaults",
+			cfg: HeaderOverridesConfig{
+				DefaultHeaders: map[string]string{
+					"X-Shared": defaultVal,
+				},
+				CustomUpstreamHeaders: map[string]string{
+					"X-Shared": staticVal,
+				},
+				PassthroughUserHeaders: true,
+				// default-open (skip mode with empty skip list) — all non-blocked
+				// passthrough headers are forwarded.
+			},
+			passthrough: http.Header{
+				"X-Shared": {passVal},
+			},
+			want: map[string]string{
+				"X-Shared": passVal,
+			},
+		},
+		{
+			name: "blocked default skipped, static still applied",
+			cfg: HeaderOverridesConfig{
+				DefaultHeaders: map[string]string{
+					"Authorization":  "Bearer leaked", // blocked credential
+					"Content-Length": "4096",          // blocked transport header
+					"X-Default":      defaultVal,
+				},
+				CustomUpstreamHeaders: map[string]string{
+					"Authorization": "Bearer leaked", // blocked credential
+					"X-Static":      staticVal,
+				},
+			},
+			want: map[string]string{
+				"X-Default": defaultVal,
+				"X-Static":  staticVal,
+			},
+			wantMissing: []string{"Authorization", "Content-Length"},
+		},
+		{
+			name: "skipped default preserved when passthrough not allowed",
+			cfg: HeaderOverridesConfig{
+				DefaultHeaders: map[string]string{
+					"X-Shared":  defaultVal,
+					"X-Default": defaultVal,
+				},
+				CustomUpstreamHeaders: map[string]string{
+					"X-Shared": staticVal,
+				},
+				PassthroughUserHeaders: true,
+				// Allow mode: only the listed names are forwarded.
+				SkipMode:    "allow",
+				SkipHeaders: []string{"X-Allowed"},
+			},
+			passthrough: http.Header{
+				"X-Shared":  {passVal}, // not in allow list → blocked from passthrough
+				"X-Allowed": {passVal}, // allowed, but no static/default conflict
+				"X-Other":   {otherPass}, // not allowed
+			},
+			want: map[string]string{
+				"X-Shared":  staticVal, // static preserved (passthrough blocked)
+				"X-Default": defaultVal,
+				"X-Allowed": passVal,
+			},
+			wantMissing: []string{"X-Other"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, _ := http.NewRequest(http.MethodPost, "http://example.com", nil)
+			if tt.passthrough != nil {
+				ctx := WithPassthroughHeaders(req.Context(), tt.passthrough)
+				req = req.WithContext(ctx)
+			}
+			ApplyHeaderOverrides(req, tt.cfg, tt.userPathAlias)
+
+			for key, want := range tt.want {
+				if got := req.Header.Get(key); got != want {
+					t.Errorf("header %q = %q, want %q", key, got, want)
+				}
+			}
+			for _, key := range tt.wantMissing {
+				if got := req.Header.Get(key); got != "" {
+					t.Errorf("header %q should be missing, got %q", key, got)
+				}
+			}
+		})
+	}
+}
