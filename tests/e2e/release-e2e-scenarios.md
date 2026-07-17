@@ -93,6 +93,21 @@ Stateful note:
   managed read-only, env-over-YAML, startup validation) needs gateways launched
   with custom config, so it is covered by a standalone script rather than this
   running-stack matrix
+- `S173`-`S182` exercise the Anthropic Messages drop-in compatibility fixes
+  (`x-api-key` auth fallback, `stop_sequence`, seeded stream usage,
+  dialect-aware `/v1/models` and 404s); `S173`-`S175` need the auth-enabled
+  gateway (`$AUTH_BASE_URL`), the rest are read-mostly on `$BASE_URL` and
+  rerunnable in any order
+- `S183`-`S191` exercise the Anthropic Message Batches API
+  (`/v1/messages/batches*`); each creates its own `msgbatch_`-scoped batch and
+  is rerunnable in any order, but (like `S47`-`S48`) they leave
+  `in_progress`/`canceling` batches behind since the scenarios do not wait for
+  a real provider batch to end. Bedrock Mantle (`internal/providers/bedrockmantle`)
+  has no running-stack coverage here: no `BEDROCK_MANTLE_API_KEY`/AWS
+  credentials are available in `.env`, so it is covered by its unit test suite
+  (`config_test.go`, `bedrock_mantle_test.go`) plus a one-off manual check that
+  a `BEDROCK_MANTLE_*`-prefixed provider registers distinctly from `BEDROCK_*`
+  at startup without colliding or crashing
 - For stateful partial reruns, prefer a contiguous range that includes the
   prerequisite setup scenarios, or rerun with the same `--qa-suffix` and
   `--keep-artifacts`
@@ -4235,4 +4250,324 @@ mcp_post "$BASE_URL/mcp" "$SID" '{"jsonrpc":"2.0","id":4,"method":"resources/lis
 mcp_post "$BASE_URL/mcp" "$SID" \
   '{"jsonrpc":"2.0","id":5,"method":"resources/read","params":{"uri":"mock://alpha/info"}}' \
   | jq -e 'any(.result.contents[]?; .text == "MOCKMCP_ALPHA_RESOURCE_OK")' >/dev/null
+```
+
+## 24. Anthropic Messages drop-in compatibility
+
+These scenarios cover the gaps closed by the Anthropic-SDK drop-in fix pass:
+`x-api-key` auth fallback, `stop_sequence` surfaced as a typed field, seeded
+`message_start` usage on streams, dialect-aware `/v1/models`, and a canonical
+404 envelope that no longer swallows 405s. `S173`-`S175` run on the
+auth-enabled gateway (`$AUTH_BASE_URL`) since the auth fallback needs a
+gateway with a master key configured; the rest run on `$BASE_URL`, which runs
+in unsafe mode. All are read-mostly and rerunnable in any order.
+
+### S173 `x-api-key` header authenticates like `Authorization: Bearer`
+
+Checks the Anthropic-native credential header works unchanged, matching
+`Anthropic(api_key=...)` SDK defaults.
+
+```bash
+RESP_FILE="$QA_RUN_DIR/s173.chat.json"
+curl -fsS "$AUTH_BASE_URL/v1/chat/completions" \
+  -H 'Content-Type: application/json' \
+  -H "x-api-key: $GOMODEL_MASTER_KEY" \
+  -d '{"model":"gpt-4.1-nano","messages":[{"role":"user","content":"Reply with exactly QA_XAPIKEY_OK"}],"max_tokens":20}' \
+  > "$RESP_FILE"
+assert_chat_response_contains "$RESP_FILE" "openai" "QA_XAPIKEY_OK"
+```
+
+### S174 Missing credentials names both accepted schemes (negative)
+
+Checks the combined error message added when neither header is present.
+
+```bash
+HEADERS_FILE="$QA_RUN_DIR/s174.headers"
+BODY_FILE="$QA_RUN_DIR/s174.body"
+curl -sS -D "$HEADERS_FILE" -o "$BODY_FILE" "$AUTH_BASE_URL/v1/chat/completions" \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"gpt-4.1-nano","messages":[{"role":"user","content":"hi"}]}'
+grep -Eiq '^HTTP/.* 401 ' "$HEADERS_FILE"
+jq -e '.error.type == "authentication_error" and (.error.message | test("Authorization: Bearer") and test("x-api-key"))' "$BODY_FILE" >/dev/null
+```
+
+### S175 `Authorization` takes precedence over `x-api-key` when both are sent
+
+A wrong bearer token is still rejected even when a valid `x-api-key` is also
+present, confirming the fallback only applies when `Authorization` is absent.
+
+```bash
+HEADERS_FILE="$QA_RUN_DIR/s175.headers"
+BODY_FILE="$QA_RUN_DIR/s175.body"
+curl -sS -D "$HEADERS_FILE" -o "$BODY_FILE" "$AUTH_BASE_URL/v1/chat/completions" \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer totally-wrong-key' \
+  -H "x-api-key: $GOMODEL_MASTER_KEY" \
+  -d '{"model":"gpt-4.1-nano","messages":[{"role":"user","content":"hi"}]}'
+grep -Eiq '^HTTP/.* 401 ' "$HEADERS_FILE"
+```
+
+### S176 `stop_sequence` surfaces as a typed field (non-streaming, Anthropic backend)
+
+Checks the natively reported matched sequence round-trips through
+`/v1/messages` as `stop_reason: "stop_sequence"` plus `stop_sequence`.
+
+```bash
+RESP_FILE="$QA_RUN_DIR/s176.messages.json"
+curl -fsS "$BASE_URL/v1/messages" \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"claude-sonnet-4-6","max_tokens":64,"stop_sequences":["QA_STOP_HERE"],"messages":[{"role":"user","content":"Count from 1 to 10, one number per line. After the number 3 write the exact text QA_STOP_HERE then continue."}]}' \
+  > "$RESP_FILE"
+jq '{stop_reason,stop_sequence}' "$RESP_FILE"
+jq -e '.stop_reason == "stop_sequence" and .stop_sequence == "QA_STOP_HERE"' "$RESP_FILE" >/dev/null
+```
+
+### S177 `stop_sequence` in streaming `message_delta` plus seeded `message_start` usage
+
+Checks the streaming counterpart of `S176` and that `message_start` no longer
+reports a hardcoded zero for `usage.input_tokens`.
+
+```bash
+SSE_FILE="$QA_RUN_DIR/s177.messages.sse"
+curl -fsS --no-buffer "$BASE_URL/v1/messages" \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"claude-sonnet-4-6","max_tokens":64,"stream":true,"stop_sequences":["QA_STOP_HERE"],"messages":[{"role":"user","content":"Count from 1 to 10, one number per line. After the number 3 write the exact text QA_STOP_HERE then continue."}]}' \
+  > "$SSE_FILE"
+grep -A1 '^event: message_start' "$SSE_FILE" | sed -n '2p' | sed 's/^data: //' \
+  | jq -e '.message.usage.input_tokens > 0' >/dev/null
+grep -A1 '^event: message_delta' "$SSE_FILE" | sed -n '2p' | sed 's/^data: //' \
+  | jq -e '.delta.stop_reason == "stop_sequence" and .delta.stop_sequence == "QA_STOP_HERE"' >/dev/null
+```
+
+### S178 OpenAI-family backend keeps `end_turn` through `/v1/messages` (documented limitation)
+
+`finish_reason: "stop"` conflates a natural stop with a stop-sequence hit, so
+OpenAI-family providers structurally cannot report `stop_sequence`; checks the
+gateway keeps `end_turn` rather than fabricating a value.
+
+```bash
+RESP_FILE="$QA_RUN_DIR/s178.messages.json"
+curl -fsS "$BASE_URL/v1/messages" \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"gpt-4.1-nano","max_tokens":64,"stop_sequences":["QA_STOP_HERE"],"messages":[{"role":"user","content":"Count from 1 to 10, one number per line. After the number 3 write the exact text QA_STOP_HERE then continue."}]}' \
+  > "$RESP_FILE"
+jq '{stop_reason,stop_sequence}' "$RESP_FILE"
+jq -e '.stop_reason == "end_turn" and .stop_sequence == null' "$RESP_FILE" >/dev/null
+```
+
+### S179 `GET /v1/models` renders the Anthropic shape for Anthropic SDK clients
+
+The Anthropic SDK always sends `anthropic-version`; checks the response takes
+the Anthropic list shape (`type`, `display_name`, `created_at`,
+`has_more`/`first_id`/`last_id`) instead of the OpenAI shape.
+
+```bash
+RESP_FILE="$QA_RUN_DIR/s179.models.json"
+curl -fsS "$BASE_URL/v1/models" -H 'anthropic-version: 2023-06-01' > "$RESP_FILE"
+jq '{sample: .data[0], has_more, first_id, last_id}' "$RESP_FILE"
+jq -e '
+    (.data | length) > 0
+    and .data[0].type == "model"
+    and (.data[0].display_name | type == "string")
+    and (.data[0] | has("object") | not)
+    and .has_more == false
+    and (.first_id != null)
+    and (.last_id != null)
+  ' "$RESP_FILE" >/dev/null
+```
+
+### S180 `GET /v1/models` stays OpenAI-shaped without the header (regression)
+
+Checks the default OpenAI-compatible listing shape is unchanged for callers
+that do not send `anthropic-version`.
+
+```bash
+RESP_FILE="$QA_RUN_DIR/s180.models.json"
+curl -fsS "$BASE_URL/v1/models" > "$RESP_FILE"
+jq -e '.object == "list" and (.data[0].object == "model")' "$RESP_FILE" >/dev/null
+```
+
+### S181 Unknown route 404 renders in the caller's wire dialect
+
+Checks the canonical 404 envelope added for unclassified routes: Anthropic
+shape when `anthropic-version` is present, gateway/OpenAI shape otherwise.
+
+```bash
+ANTHROPIC_BODY="$QA_RUN_DIR/s181.anthropic.json"
+DEFAULT_BODY="$QA_RUN_DIR/s181.default.json"
+curl -sS -o "$ANTHROPIC_BODY" -w '%{http_code}\n' "$BASE_URL/v1/does-not-exist" -H 'anthropic-version: 2023-06-01'
+curl -sS -o "$DEFAULT_BODY" -w '%{http_code}\n' "$BASE_URL/v1/does-not-exist"
+jq '.' "$ANTHROPIC_BODY"
+jq '.' "$DEFAULT_BODY"
+jq -e '.type == "error" and .error.type == "not_found_error"' "$ANTHROPIC_BODY" >/dev/null
+jq -e '(.type != "error") and .error.type == "not_found_error"' "$DEFAULT_BODY" >/dev/null
+```
+
+### S182 Known route with the wrong method still returns 405 (regression)
+
+The dialect-aware 404 handler is registered as the router-level
+`NotFoundHandler`, not a wildcard route, specifically so it does not shadow
+echo's 405 method-not-allowed handling for routes that do exist.
+
+```bash
+HEADERS_FILE="$QA_RUN_DIR/s182.headers"
+curl -sS -D "$HEADERS_FILE" -o /dev/null -X GET "$BASE_URL/v1/chat/completions"
+grep -Eiq '^HTTP/.* 405 ' "$HEADERS_FILE"
+```
+
+## 25. Anthropic Message Batches API
+
+These scenarios exercise `/v1/messages/batches*`, the Anthropic-dialect ingress
+over the same native-batch pipeline that serves `/v1/batches`. A batch's
+requests are translated per-item to canonical chat requests, so a Message
+Batch can route to any provider with native batch support, not only
+Anthropic. Batch IDs are pure prefix aliases of one underlying resource:
+`msgbatch_<uuid>` on this dialect, `batch_<uuid>` on `/v1/batches`. Real
+provider batches can take a long time to complete, so these scenarios check
+create/get/list/cancel/delete-guard/validation behavior rather than waiting
+for a batch to end; `S183`-`S191` are self-contained and rerunnable in any
+order but leave `in_progress`/`canceling` batches behind, like `S47`-`S48`.
+
+### S183 Create a native Anthropic Message Batch
+
+```bash
+RESP_FILE="$QA_RUN_DIR/s183.batch.json"
+curl -fsS "$BASE_URL/v1/messages/batches" \
+  -H 'Content-Type: application/json' \
+  -d '{"requests":[{"custom_id":"qa-msgbatch-anthropic-1","params":{"model":"claude-sonnet-4-6","max_tokens":32,"messages":[{"role":"user","content":"Reply with exactly QA_MSGBATCH_ANTHROPIC_OK"}]}}]}' \
+  > "$RESP_FILE"
+jq '{id,type,processing_status,request_counts}' "$RESP_FILE"
+jq -e '.type == "message_batch" and (.id | startswith("msgbatch_")) and (.processing_status | type == "string")' "$RESP_FILE" >/dev/null
+echo "$(jq -r .id "$RESP_FILE")" > "$QA_RUN_DIR/s183.batch-id"
+```
+
+### S184 Create a Message Batch routed to an OpenAI model (cross-provider)
+
+Checks the Anthropic Message Batches dialect is provider-agnostic like
+`/v1/messages`: an OpenAI model batch is created and materialized into an
+uploaded JSONL input file under the hood.
+
+```bash
+RESP_FILE="$QA_RUN_DIR/s184.batch.json"
+curl -fsS "$BASE_URL/v1/messages/batches" \
+  -H 'Content-Type: application/json' \
+  -d '{"requests":[{"custom_id":"qa-msgbatch-openai-1","params":{"model":"gpt-4.1-nano","max_tokens":32,"messages":[{"role":"user","content":"Reply with exactly QA_MSGBATCH_OPENAI_OK"}]}}]}' \
+  > "$RESP_FILE"
+jq '{id,type,processing_status}' "$RESP_FILE"
+jq -e '.type == "message_batch" and (.id | startswith("msgbatch_"))' "$RESP_FILE" >/dev/null
+echo "$(jq -r .id "$RESP_FILE")" > "$QA_RUN_DIR/s184.batch-id"
+```
+
+### S185 Get and list Message Batches
+
+```bash
+BATCH_ID=$(cat "$QA_RUN_DIR/s183.batch-id")
+GET_FILE="$QA_RUN_DIR/s185.get.json"
+LIST_FILE="$QA_RUN_DIR/s185.list.json"
+curl -fsS "$BASE_URL/v1/messages/batches/$BATCH_ID" > "$GET_FILE"
+jq -e --arg id "$BATCH_ID" '.id == $id and .type == "message_batch" and (.expires_at | type == "string")' "$GET_FILE" >/dev/null
+
+curl -fsS "$BASE_URL/v1/messages/batches?limit=20" > "$LIST_FILE"
+jq '{has_more,first_id,last_id,count:(.data|length)}' "$LIST_FILE"
+jq -e --arg id "$BATCH_ID" '[.data[].id] | index($id) != null' "$LIST_FILE" >/dev/null
+```
+
+### S186 Message Batch IDs are dialect aliases of `/v1/batches` resources
+
+Checks the `msgbatch_`/`batch_` prefix aliasing holds in both directions: a
+batch created on one dialect is retrievable on the other under the mapped ID.
+
+```bash
+BATCH_ID=$(cat "$QA_RUN_DIR/s183.batch-id")
+ALIASED_FILE="$QA_RUN_DIR/s186.aliased.json"
+curl -fsS "$BASE_URL/v1/batches/batch_${BATCH_ID#msgbatch_}" > "$ALIASED_FILE"
+jq -e --arg id "batch_${BATCH_ID#msgbatch_}" '.id == $id and .object == "batch" and .provider == "anthropic"' "$ALIASED_FILE" >/dev/null
+
+CREATE_FILE="$QA_RUN_DIR/s186.create.json"
+curl -fsS "$BASE_URL/v1/batches" \
+  -H 'Content-Type: application/json' \
+  -d '{"endpoint":"/v1/chat/completions","requests":[{"custom_id":"qa-reverse-alias-1","method":"POST","url":"/v1/chat/completions","body":{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"Reply with exactly QA_REVERSE_BATCH_OK"}],"max_tokens":32}}]}' \
+  > "$CREATE_FILE"
+NATIVE_ID=$(jq -er '.id' "$CREATE_FILE")
+REVERSE_FILE="$QA_RUN_DIR/s186.reverse.json"
+curl -fsS "$BASE_URL/v1/messages/batches/msgbatch_${NATIVE_ID#batch_}" > "$REVERSE_FILE"
+jq -e --arg id "msgbatch_${NATIVE_ID#batch_}" '.id == $id and .type == "message_batch"' "$REVERSE_FILE" >/dev/null
+```
+
+### S187 Cancel a Message Batch
+
+```bash
+BATCH_ID=$(cat "$QA_RUN_DIR/s184.batch-id")
+RESP_FILE="$QA_RUN_DIR/s187.cancel.json"
+curl -fsS -X POST "$BASE_URL/v1/messages/batches/$BATCH_ID/cancel" > "$RESP_FILE"
+jq '{id,processing_status,cancel_initiated_at}' "$RESP_FILE"
+jq -e --arg id "$BATCH_ID" '.id == $id and (.processing_status == "canceling" or .processing_status == "ended")' "$RESP_FILE" >/dev/null
+```
+
+### S188 Delete guard rejects a still-processing Message Batch (negative)
+
+Batches still processing must be canceled first, matching the Anthropic
+Message Batches contract.
+
+```bash
+BATCH_ID=$(cat "$QA_RUN_DIR/s183.batch-id")
+HEADERS_FILE="$QA_RUN_DIR/s188.headers"
+BODY_FILE="$QA_RUN_DIR/s188.body"
+curl -sS -D "$HEADERS_FILE" -o "$BODY_FILE" -X DELETE "$BASE_URL/v1/messages/batches/$BATCH_ID"
+cat "$BODY_FILE"
+grep -Eiq '^HTTP/.* 400 ' "$HEADERS_FILE"
+jq -e '.type == "error" and .error.type == "invalid_request_error" and (.error.message | test("still processing"))' "$BODY_FILE" >/dev/null
+```
+
+### S189 Message Batch create validation negatives
+
+```bash
+HEADERS_FILE="$QA_RUN_DIR/s189.headers"
+BODY_FILE="$QA_RUN_DIR/s189.body"
+
+curl -sS -D "$HEADERS_FILE" -o "$BODY_FILE" "$BASE_URL/v1/messages/batches" \
+  -H 'Content-Type: application/json' -d '{"requests":[]}'
+grep -Eiq '^HTTP/.* 400 ' "$HEADERS_FILE"
+
+curl -sS -D "$HEADERS_FILE" -o "$BODY_FILE" "$BASE_URL/v1/messages/batches" \
+  -H 'Content-Type: application/json' \
+  -d '{"requests":[{"custom_id":"dup","params":{"model":"gpt-4.1-nano","max_tokens":10,"messages":[{"role":"user","content":"a"}]}},{"custom_id":"dup","params":{"model":"gpt-4.1-nano","max_tokens":10,"messages":[{"role":"user","content":"b"}]}}]}'
+grep -Eiq '^HTTP/.* 400 ' "$HEADERS_FILE"
+jq -e '.error.message | test("not unique")' "$BODY_FILE" >/dev/null
+
+curl -sS -D "$HEADERS_FILE" -o "$BODY_FILE" "$BASE_URL/v1/messages/batches" \
+  -H 'Content-Type: application/json' \
+  -d '{"requests":[{"custom_id":"  ","params":{"model":"gpt-4.1-nano","max_tokens":10,"messages":[{"role":"user","content":"a"}]}}]}'
+grep -Eiq '^HTTP/.* 400 ' "$HEADERS_FILE"
+jq -e '.error.message | test("required")' "$BODY_FILE" >/dev/null
+```
+
+### S190 Message Batch results before ready returns the not-ready envelope (negative)
+
+```bash
+BATCH_ID=$(cat "$QA_RUN_DIR/s183.batch-id")
+HEADERS_FILE="$QA_RUN_DIR/s190.headers"
+BODY_FILE="$QA_RUN_DIR/s190.body"
+curl -sS -D "$HEADERS_FILE" -o "$BODY_FILE" "$BASE_URL/v1/messages/batches/$BATCH_ID/results"
+cat "$BODY_FILE"
+grep -Eiq '^HTTP/.* 409 ' "$HEADERS_FILE"
+jq -e '.error.type == "invalid_request_error" and (.error.message | test("not ready"))' "$BODY_FILE" >/dev/null
+```
+
+### S191 Mixed-provider requests in one Message Batch are rejected (negative)
+
+A single native batch is submitted to one upstream provider; checks a batch
+mixing an Anthropic and an OpenAI model item is rejected before submission,
+the same discipline as the file-based `/v1/batches` mixed-provider check
+(`S48`).
+
+```bash
+HEADERS_FILE="$QA_RUN_DIR/s191.headers"
+BODY_FILE="$QA_RUN_DIR/s191.body"
+curl -sS -D "$HEADERS_FILE" -o "$BODY_FILE" "$BASE_URL/v1/messages/batches" \
+  -H 'Content-Type: application/json' \
+  -d '{"requests":[{"custom_id":"qa-mixed-a","params":{"model":"claude-sonnet-4-6","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}},{"custom_id":"qa-mixed-b","params":{"model":"gpt-4.1-nano","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}}]}'
+cat "$BODY_FILE"
+grep -Eiq '^HTTP/.* 400 ' "$HEADERS_FILE"
+jq -e '.error.message | test("single provider per batch")' "$BODY_FILE" >/dev/null
 ```
