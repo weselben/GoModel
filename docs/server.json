@@ -1,6 +1,6 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.enterpilot/gomodel",
+  "name": "io.github.ENTERPILOT/gomodel",
   "title": "GoModel",
   "description": "Self-hosted gateway aggregating upstream MCP servers behind one authenticated HTTP endpoint.",
   "repository": {
