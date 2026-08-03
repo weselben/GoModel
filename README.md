@@ -94,6 +94,26 @@ curl http://localhost:8080/v1/responses \
   }'
 ```
 
+## Quick Start (local dev)
+
+Spin up a throwaway local dev preview with Docker (preview port range 64900-65000, preview host 116.202.192.143):
+
+```bash
+docker run --rm -d \
+  --name gomodel-dev \
+  -p 64900:8080 \
+  -e OPENAI_API_KEY="your-openai-key" \
+  enterpilot/gomodel
+```
+
+Then open the dashboard at `http://116.202.192.143:64900/admin/dashboard` (or `http://localhost:64900/admin/dashboard` when running locally).
+
+Stop the preview with:
+
+```bash
+docker stop gomodel-dev
+```
+
 ## Using GoModel with official SDKs
 
 GoModel exposes an OpenAI-compatible API at `/v1` and an Anthropic-compatible
