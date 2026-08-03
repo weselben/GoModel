@@ -20,14 +20,14 @@ if [ -f "$REPO_ROOT/.env.example" ]; then
 elif [ -f "$REPO_ROOT/.env.template" ]; then
     ENV_FILE="$REPO_ROOT/.env.template"
 else
-    echo "NOTICE: no .env.example or .env.template found in $REPO_ROOT — nothing to check"
+    echo "NOTICE: no .env.example or .env.template found in $REPO_ROOT — nothing to check" >&2
     exit 0
 fi
 
-# Extract uncommented VAR=... names. Matches [A-Za-z_][A-Za-z0-9_]*= and
-# captures just the name. Skips blank lines and lines starting with '#'.
-required_vars=$(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$ENV_FILE" \
-    | sed -E 's/^([A-Za-z_][A-Za-z0-9_]*)=.*/\1/' || true)
+# Extract uncommented VAR=... names (with or without an `export ` prefix).
+# Captures just the name. Skips blank lines and lines starting with '#'.
+required_vars=$(grep -E '^(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=' "$ENV_FILE" \
+    | sed -E 's/^(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=.*/\2/' || true)
 
 if [ -z "$required_vars" ]; then
     echo "OK: no required env vars in $ENV_FILE"
