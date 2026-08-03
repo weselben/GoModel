@@ -13,6 +13,8 @@
   import { virtualModels } from "./virtualModels.svelte.js";
   import { pricingOverrides } from "./pricingOverrides.svelte.js";
   import ModelTable from "./ModelTable.svelte";
+  import ModelsTableSkeleton from "./ModelsTableSkeleton.svelte";
+  import { shouldShowModelsSkeleton } from "./modelsSkeletonLogic.js";
   import VirtualModelEditor from "./VirtualModelEditor.svelte";
   import PricingOverrideEditor from "./PricingOverrideEditor.svelte";
   import FailoverEditor from "./FailoverEditor.svelte";
@@ -49,6 +51,9 @@
   });
 
   const authError = $derived(auth.needsAuth);
+  const showSkeleton = $derived(
+    shouldShowModelsSkeleton(modelsStore.loading, virtualModels.displayModels.length),
+  );
 </script>
 
 <div>
@@ -127,6 +132,9 @@
 
   {#if virtualModels.displayModels.length > 0 || modelsStore.filter}
     <ModelTable />
+  {/if}
+  {#if showSkeleton}
+    <ModelsTableSkeleton />
   {/if}
 
   {#if virtualModels.displayModels.length === 0 && !modelsStore.loading && !authError && !modelsStore.filter && (modelsStore.activeCategory === "all" || !modelsStore.activeCategory)}
