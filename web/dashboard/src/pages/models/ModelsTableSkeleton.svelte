@@ -16,8 +16,8 @@
     <thead>
       <tr>
         <th>Model</th>
-        <th>Provider</th>
-        <th class="col-price">Pricing</th>
+        <th>Modes</th>
+        <th class="col-price">Input / Output ($/MTok)</th>
         <th class="model-actions-header"></th>
       </tr>
     </thead>
@@ -78,10 +78,13 @@
   }
 
   /* Freeze the shimmer (single static frame) for reduced-motion users,
-     matching the convention in src/styles/cards-charts.css. */
+     matching the convention in src/styles/cards-charts.css. Use a flat
+     fill so the frozen frame reads as a solid placeholder instead of a
+     gradient ramp. */
   @media (prefers-reduced-motion: reduce) {
     .skeleton-bar {
         animation: none;
+        background: var(--bg-surface-hover);
       }
   }
 
