@@ -951,11 +951,12 @@ func TestCreateAgent_MissingAgentIDReturnsBadGateway(t *testing.T) {
 	}
 }
 
-// TestWorkspaceOrDefaultFallsBackThroughTemp exercises the fallback
-// chain when the bridge manager reports an empty workspace and
-// os.TempDir() also returns empty. The contract: a non-empty fallback
-// path is always returned so callers can blindly concatenate paths.
-func TestWorkspaceOrDefaultFallsBackThroughTemp(t *testing.T) {
+// TestWorkspaceOrDefaultFallsBackToTemp covers the case when the bridge
+// manager reports an empty workspace and os.TempDir() returns the
+// platform default. The os.TempDir()=="" final branch is unreachable on
+// Linux/macOS — setting TMPDIR="" still produces a usable temp dir, so
+// the runtime contract is non-empty. This test asserts that contract.
+func TestWorkspaceOrDefaultFallsBackToTemp(t *testing.T) {
 	rs := newReplayServer(t, func(w http.ResponseWriter, path string, body []byte) {})
 	p := rs.provider(t)
 
@@ -1177,27 +1178,36 @@ func TestRunSend_StreamWireErrorSurfacesBadGateway(t *testing.T) {
 
 // TestTransport_NilHTTPClientInAttachModeFallsBack exercises the
 // `hc == nil` branch inside transport() when no bridge manager is
-// attached — the package default client must be used.
+// attached — the package default client must be used. We assert this
+// by making a successful Unary RPC through the constructed Transport
+// after passing a nil http.Client to NewWithHTTPClient.
 func TestTransport_NilHTTPClientInAttachModeFallsBack(t *testing.T) {
 	t.Setenv(AttachTokenEnv, "tok")
-	p, err := NewWithHTTPClient("cursor-key", "http://127.0.0.1:1", nil, llmclient.Hooks{})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	t.Cleanup(srv.Close)
+
+	p, err := NewWithHTTPClient("cursor-key", srv.URL, nil, llmclient.Hooks{})
 	if err != nil {
 		t.Fatalf("NewWithHTTPClient: %v", err)
 	}
 	defer p.Close()
 
-	// Force transport() to be called without a managed bridge. The
-	// AttachTokenEnv above means an attach-mode Manager exists but
-	// has no started endpoint — transport should still hand back a
-	// usable Transport rooted at the base URL.
+	// transport() should normalize nil → http.DefaultClient and the
+	// resulting Transport must succeed against the httptest server.
 	tr, err := p.transport(context.Background())
 	if err != nil {
-		// Surfaces a startFailure here when bridge attach cannot bring
-		// up an endpoint — also acceptable: the contract is that this
-		// returns a *Transport or a typed error, never a panic.
-		return
+		t.Fatalf("transport: %v", err)
 	}
-	if tr == nil {
-		t.Error("transport returned nil with no error")
+	var out map[string]any
+	if err := tr.Unary(context.Background(), "svc", "Send", map[string]string{"k": "v"}, &out); err != nil {
+		t.Fatalf("Unary through default-client transport: %v", err)
+	}
+	if out["ok"] != true {
+		t.Errorf("out = %v, want ok:true", out)
 	}
 }

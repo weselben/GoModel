@@ -629,13 +629,16 @@ func TestScrubbedBridgeEnv(t *testing.T) {
 func TestScrubbedBridgeEnvForwardsProxyEnv(t *testing.T) {
 	// Operators behind a corporate proxy need HTTP(S)_PROXY/NO_PROXY
 	// forwarded to the bridge. Without these the bridge cannot reach
-	// the Cursor APIs.
+	// the Cursor APIs. ALL_PROXY is the curl-style catch-all and is
+	// also forwarded for compatibility with curl-derived tooling.
 	t.Setenv("HTTP_PROXY", "http://proxy.example:8080")
 	t.Setenv("HTTPS_PROXY", "http://proxy.example:8443")
 	t.Setenv("NO_PROXY", "localhost,127.0.0.1,.internal")
+	t.Setenv("ALL_PROXY", "http://all-proxy.example:8888")
 	t.Setenv("http_proxy", "http://lowercase-proxy.example:3128")
 	t.Setenv("https_proxy", "http://lowercase-proxy.example:3129")
 	t.Setenv("no_proxy", "intra.example")
+	t.Setenv("all_proxy", "http://lowercase-all.example:7777")
 	t.Setenv("FOO_PROXY", "should-not-leak") // unrelated proxy var
 	env := scrubbedBridgeEnv("child-key")
 	joined := strings.Join(env, "\n")
@@ -643,9 +646,11 @@ func TestScrubbedBridgeEnvForwardsProxyEnv(t *testing.T) {
 		"HTTP_PROXY=http://proxy.example:8080",
 		"HTTPS_PROXY=http://proxy.example:8443",
 		"NO_PROXY=localhost,127.0.0.1,.internal",
+		"ALL_PROXY=http://all-proxy.example:8888",
 		"http_proxy=http://lowercase-proxy.example:3128",
 		"https_proxy=http://lowercase-proxy.example:3129",
 		"no_proxy=intra.example",
+		"all_proxy=http://lowercase-all.example:7777",
 	} {
 		if !strings.Contains(joined, must) {
 			t.Errorf("env missing proxy var %q\n%s", must, joined)
@@ -810,6 +815,71 @@ func TestResolveBridgeBinaryMissingPathCoversUnreachable(t *testing.T) {
 	if !errors.Is(err, ErrBridgeUnreachable) {
 		t.Errorf("err = %v, want wrapping ErrBridgeUnreachable", err)
 	}
+}
+
+// TestResolveBridgeBinaryNonExecutableSurfacesErrUnreachable covers
+// the executableBinary branch — a non-executable file at the env
+// var must surface as ErrBridgeUnreachable instead of letting exec.Start
+// report it later as a generic spawn failure (502).
+func TestResolveBridgeBinaryNonExecutableSurfacesErrUnreachable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("executable-bit check is unix-only")
+	}
+	path := filepath.Join(t.TempDir(), "fake-binary")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	t.Setenv("CURSOR_SDK_BRIDGE_BIN", path)
+	_, err := resolveBridgeBinary()
+	if err == nil {
+		t.Fatal("expected error from non-executable binary, got nil")
+	}
+	if !errors.Is(err, ErrBridgeUnreachable) {
+		t.Errorf("err = %v, want wrapping ErrBridgeUnreachable", err)
+	}
+}
+
+// TestExecutableBinaryClassification drives the executableBinary table
+// directly — missing files, directories, non-executable regular files,
+// and executable regular files. The reason string is asserted so future
+// changes to the categorization stay honest.
+func TestExecutableBinaryClassification(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("executable-bit check is unix-only")
+	}
+	t.Run("missing", func(t *testing.T) {
+		ok, why := executableBinary(filepath.Join(t.TempDir(), "absent"))
+		if ok || why != "missing" {
+			t.Errorf("missing file: ok=%v why=%q, want false/missing", ok, why)
+		}
+	})
+	t.Run("directory", func(t *testing.T) {
+		d := t.TempDir()
+		ok, why := executableBinary(d)
+		if ok || why != "is a directory" {
+			t.Errorf("directory: ok=%v why=%q, want false/is a directory", ok, why)
+		}
+	})
+	t.Run("non-executable", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "no-exec")
+		if err := os.WriteFile(path, []byte("data"), 0o644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		ok, why := executableBinary(path)
+		if ok || why == "" || why == "missing" {
+			t.Errorf("non-exec: ok=%v why=%q, want false/non-empty-reason", ok, why)
+		}
+	})
+	t.Run("executable", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "exec")
+		if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		ok, why := executableBinary(path)
+		if !ok || why != "" {
+			t.Errorf("executable: ok=%v why=%q, want true/empty", ok, why)
+		}
+	})
 }
 
 // TestResolveBridgeBinaryPathDirectoryNotFound covers the

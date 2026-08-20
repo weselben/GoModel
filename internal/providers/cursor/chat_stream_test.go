@@ -744,13 +744,20 @@ func TestStreamConverter_InnerLoopMalformedFrameSurfaces502(t *testing.T) {
 }
 
 // TestStreamConverter_InnerLoopEOFAfterSkipsReturnsDone covers the
-// inner-loop EOF branch: after skipping several keepalive frames, the
-// stream then ends cleanly — Read must return [DONE] exactly once.
+// inner-loop EOF branch: after the inner loop has skipped a few
+// unrecognized (non-empty, non-keepalive) frames, the stream then
+// ends cleanly — Read must return [DONE] exactly once.
+//
+// NOTE: `{}` keepalives are drained by StreamReader.Next internally
+// and never reach the converter's inner loop, so the unrecognized
+// frames below must be non-empty to actually exercise the bound.
 func TestStreamConverter_InnerLoopEOFAfterSkipsReturnsDone(t *testing.T) {
 	var buf bytes.Buffer
-	// Only keepalives ({}) then EOF.
+	// Five unrecognized sdkMessage frames, then EOF. StreamReader.Next
+	// surfaces each one; the converter's inner loop counts them as
+	// skipped and reaches EOF on the next Next() call.
 	for i := 0; i < 5; i++ {
-		payload := []byte("{}")
+		payload := []byte(`{"sdkMessage":{"type":"unknown","message":{}}}`)
 		hdr := make([]byte, 5)
 		binary.BigEndian.PutUint32(hdr[1:5], uint32(len(payload)))
 		buf.Write(hdr)
