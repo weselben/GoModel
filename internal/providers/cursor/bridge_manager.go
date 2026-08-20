@@ -129,6 +129,14 @@ func NewManagedBridgeManager(apiKey string, opts ...BridgeManagerOption) (*Bridg
 	return b, nil
 }
 
+// Workspace returns the workspace directory passed to the bridge at spawn
+// time. It is the empty string in attach mode and before Start.
+func (b *BridgeManager) Workspace() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.workspaceDir
+}
+
 // NewAttachedBridgeManager creates a BridgeManager in attach mode: no
 // subprocess is spawned. Start returns (endpoint, CURSOR_BRIDGE_TOKEN).
 // The endpoint must be a valid base URL (non-empty); Close is a no-op.
