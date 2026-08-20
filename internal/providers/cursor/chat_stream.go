@@ -30,9 +30,9 @@ import (
 //     whether the stream is drained, errors, or abandoned.
 //
 // Tracking note: the Connect wire spec carries an offset per frame, but
-// the cursor bridge never advances content by offset — assistant deltas
-// repeat the cumulative text — so we deliberately ignore it (matching
-// cursor_wire.go's runStreamEnvelope contract).
+// the cursor bridge delivers incremental text deltas — concatenating the
+// deltas reproduces the cumulative text — so we deliberately ignore it
+// (matching cursor_wire.go's runStreamEnvelope contract).
 type streamConverter struct {
 	stream     *StreamReader
 	model      string

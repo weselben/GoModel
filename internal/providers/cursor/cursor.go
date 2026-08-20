@@ -40,8 +40,9 @@ const (
 )
 
 // Registration plugs the cursor provider into the factory. The DefaultBaseURL
-// is the loopback address the embedded bridge listens on; operators
-// overriding the endpoint use SetBaseURL or the cursor.base_url config field.
+// is the loopback address the embedded bridge listens on; it is consulted
+// by NewWithHTTPClient (attach mode for tests). Production mode spawns the
+// bridge on its own ephemeral port and ignores cfg.BaseURL.
 var Registration = providers.Registration{
 	Type: "cursor",
 	New:  New,

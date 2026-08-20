@@ -329,6 +329,51 @@ func TestStreamChatCompletion_MalformedFrameReturnsGatewayError502(t *testing.T)
 	}
 }
 
+func TestStreamChatCompletion_NonOKTerminalEmitsGatewayError(t *testing.T) {
+	rs := newReplayServer(t, func(w http.ResponseWriter, path string, body []byte) {
+		switch path {
+		case createAgentPath:
+			writeUnaryJSON(w, `{"agentId":"agent-1"}`)
+		case sendPath:
+			w.Header().Set("Content-Type", "application/connect+json")
+			_, _ = w.Write(frame(assistantFrame("partial")))
+			_, _ = w.Write(frame(`{"result":{"agentId":"agent-1","runId":"run-err","status":"RUN_LIFECYCLE_STATUS_ERROR","result":{"runId":"run-err","agentId":"agent-1","status":"RUN_LIFECYCLE_STATUS_ERROR","error":"boom"}}}`))
+		case closeAgentPath:
+			writeUnaryJSON(w, `{}`)
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	})
+	p := rs.provider(t)
+
+	body, err := p.StreamChatCompletion(context.Background(), &core.ChatRequest{
+		Model:    "composer-2.5",
+		Messages: []core.Message{{Role: "user", Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("StreamChatCompletion: %v", err)
+	}
+	defer func() { _ = body.Close() }()
+
+	raw, err := io.ReadAll(body)
+	if err == nil {
+		t.Fatalf("expected error from non-OK terminal, got nil; raw=%q", string(raw))
+	}
+	var gw *core.GatewayError
+	if !errors.As(err, &gw) {
+		t.Fatalf("expected *core.GatewayError, got %T", err)
+	}
+	if gw.StatusCode != http.StatusBadGateway {
+		t.Fatalf("StatusCode = %d, want %d", gw.StatusCode, http.StatusBadGateway)
+	}
+	if !strings.Contains(string(raw), `"content":"partial"`) {
+		t.Fatalf("prior chunks should still be readable, got %q", string(raw))
+	}
+	if strings.Contains(string(raw), "[DONE]") {
+		t.Fatalf("non-OK terminal must not emit [DONE], got %q", string(raw))
+	}
+}
+
 func TestStreamChatCompletion_CloseReleasesAgent(t *testing.T) {
 	releaseCh := make(chan struct{})
 	rs := newReplayServer(t, func(w http.ResponseWriter, path string, body []byte) {
