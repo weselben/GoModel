@@ -458,6 +458,11 @@ func TestResolveBridgeBinaryOrder(t *testing.T) {
 	// env override pointing at an existing file wins; LookPath must not
 	// be consulted in that case.
 	tmp := t.TempDir()
+	// Keep the host's real installation out of the test: the conventional
+	// fallback (~/.local/share/gomodel/bin) must resolve inside tmp.
+	origHome := homeDir
+	homeDir = func() (string, error) { return tmp, nil }
+	t.Cleanup(func() { homeDir = origHome })
 	binPath := filepath.Join(tmp, "cursor-sdk-bridge")
 	if err := os.WriteFile(binPath, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatalf("write fake binary: %v", err)
