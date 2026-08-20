@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -138,7 +140,7 @@ func NewWithHTTPClient(apiKey string, baseURL string, httpClient *http.Client, h
 // so the next RPC re-runs the bridge handshake against the new URL. In
 // attach mode the BridgeManager is rebuilt around the new endpoint; in
 // managed mode the spawned process keeps its own endpoint and only the
-// cached transport is dropped.
+// cached transport is dropped (startDone and the bearer are preserved).
 func (p *Provider) SetBaseURL(url string) {
 	if url == "" {
 		return
@@ -152,10 +154,18 @@ func (p *Provider) SetBaseURL(url string) {
 			p.startDone = false
 			p.startErr = nil
 		}
+		// Attach mode owns the URL; the bridge is whatever the operator
+		// pointed at.
+		p.curURL = url
+		p.tr = nil
+		p.curToken = ""
+		return
 	}
-	p.curURL = url
+	// Managed mode: the spawned process keeps its own endpoint and its
+	// own bearer; do NOT clobber the token and do NOT rewrite curURL to
+	// the user-supplied value. Just drop the cached transport so the
+	// next RPC rebuilds it from the live (manager.Start) endpoint.
 	p.tr = nil
-	p.curToken = ""
 }
 
 // Close shuts down the bridge if one was started. Idempotent and safe to
@@ -254,12 +264,18 @@ func (p *Provider) createAgent(ctx context.Context, tr *Transport, model string)
 }
 
 // closeAgent is best-effort: a failure to release the agent is logged via
-// the error return but never propagated, because the user-visible response
-// is already on the wire by the time we defer Close.
+// slog and returned as an error so callers can log it with context. Never
+// propagated as a user-visible error — the user-visible response is
+// already on the wire by the time defer Close runs.
 func (p *Provider) closeAgent(ctx context.Context, tr *Transport, agentID string) error {
 	body := closeAgentRequest{AgentID: agentID}
 	var out closeAgentResponse
-	return tr.Unary(ctx, svcAgent, methodCloseAgent, &body, &out)
+	if err := tr.Unary(ctx, svcAgent, methodCloseAgent, &body, &out); err != nil {
+		slog.Warn("cursor: CloseAgent failed; bridge may leak the agent until shutdown",
+			"agent_id", agentID, "err", err)
+		return err
+	}
+	return nil
 }
 
 // runSend issues Send and drains the stream. The terminal result frame is
@@ -418,10 +434,9 @@ func (p *Provider) Embeddings(_ context.Context, _ *core.EmbeddingRequest) (*cor
 	return nil, unsupported("embeddings")
 }
 
-// workspaceOrDefault returns the bridge's workspace dir, or "/" in attach
-// mode and before Start. The bridge requires a non-empty cwd list for
-// local agents; "/" is a safe neutral root when the caller did not pin a
-// workspace.
+// workspaceOrDefault returns the bridge's workspace dir, falling back to
+// os.TempDir() (and finally "/") so local agents do not require write
+// access to the filesystem root.
 func (p *Provider) workspaceOrDefault() string {
 	p.mu.Lock()
 	m := p.manager
@@ -430,6 +445,9 @@ func (p *Provider) workspaceOrDefault() string {
 		if ws := m.Workspace(); ws != "" {
 			return ws
 		}
+	}
+	if tmp := os.TempDir(); tmp != "" {
+		return tmp
 	}
 	return "/"
 }
