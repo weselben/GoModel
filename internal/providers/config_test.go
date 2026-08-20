@@ -87,6 +87,9 @@ var testDiscoveryConfigs = map[string]DiscoveryConfig{
 	"kimicode": {
 		DefaultBaseURL: "https://api.kimi.com/coding/v1",
 	},
+	"cursor": {
+		DefaultBaseURL: "http://127.0.0.1:32123",
+	},
 	"hetzner": {
 		DefaultBaseURL: "https://inference.hetzner.com/api/v1",
 	},

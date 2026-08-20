@@ -2,7 +2,9 @@ package providers
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -51,9 +53,27 @@ func (r *InitResult) Close() error {
 			r.stopRefresh()
 			r.stopRefresh = nil
 		}
-		if r.Cache != nil {
-			r.closeErr = r.Cache.Close()
+		var closeErrs []error
+		if r.Registry != nil {
+			for _, name := range r.Registry.ProviderNames() {
+				p := r.Registry.ProviderByName(name)
+				if p == nil {
+					continue
+				}
+				c, ok := p.(io.Closer)
+				if !ok {
+					continue
+				}
+				if err := c.Close(); err != nil {
+					closeErrs = append(closeErrs, fmt.Errorf("close provider %q: %w", name, err))
+				}
+			}
 		}
+		var cacheErr error
+		if r.Cache != nil {
+			cacheErr = r.Cache.Close()
+		}
+		r.closeErr = errors.Join(append(closeErrs, cacheErr)...)
 	})
 	return r.closeErr
 }
