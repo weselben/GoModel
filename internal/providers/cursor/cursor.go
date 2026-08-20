@@ -231,7 +231,12 @@ func (p *Provider) ChatCompletion(ctx context.Context, req *core.ChatRequest) (*
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = p.closeAgent(ctx, tr, agentID) }()
+	// Background context for the cleanup RPC: the request ctx is often
+	// already cancelled by the time defer runs (client disconnect, idle
+	// timeout), and a CloseAgent cancelled by ctx leaves the bridge agent
+	// leaked until the bridge itself shuts down. Mirror StreamChatCompletion's
+	// agentCloser (lines 343-345).
+	defer func() { _ = p.closeAgent(context.Background(), tr, agentID) }()
 
 	resp, err := p.runSend(ctx, tr, agentID, req)
 	if err != nil {
