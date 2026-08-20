@@ -1,0 +1,3 @@
+{"sdkMessage":{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hello "}]}}}
+{"sdkMessage":{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"world"}]}}}
+{"result":{"agentId":"agent-1","runId":"run-1","status":"FINISHED","result":{"runId":"run-1","agentId":"agent-1","status":"FINISHED","result":"hello world","durationMs":12,"usage":{"inputTokens":10,"outputTokens":5,"cacheReadTokens":0,"cacheWriteTokens":0,"totalTokens":15}}}}

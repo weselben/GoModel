@@ -1,0 +1,19 @@
+{
+  "items": [
+    {
+      "id": "gpt-5",
+      "displayName": "GPT-5",
+      "description": "OpenAI GPT-5 served through the Cursor subscription"
+    },
+    {
+      "id": "claude-sonnet-4.5",
+      "displayName": "Claude Sonnet 4.5",
+      "description": "Anthropic Claude Sonnet served through the Cursor subscription"
+    },
+    {
+      "id": "grok-4",
+      "displayName": "Grok 4",
+      "description": "xAI Grok served through the Cursor subscription"
+    }
+  ]
+}

@@ -1,0 +1,58 @@
+{
+  "chunks": [
+    {
+      "choices": [
+        {
+          "delta": {
+            "content": "hello ",
+            "role": "assistant"
+          },
+          "finish_reason": null,
+          "index": 0
+        }
+      ],
+      "created": 0,
+      "id": "",
+      "model": "gpt-5",
+      "object": "chat.completion.chunk",
+      "provider": "cursor"
+    },
+    {
+      "choices": [
+        {
+          "delta": {
+            "content": "world"
+          },
+          "finish_reason": null,
+          "index": 0
+        }
+      ],
+      "created": 0,
+      "id": "",
+      "model": "gpt-5",
+      "object": "chat.completion.chunk",
+      "provider": "cursor"
+    },
+    {
+      "choices": [
+        {
+          "delta": {},
+          "finish_reason": "stop",
+          "index": 0
+        }
+      ],
+      "created": 0,
+      "id": "run-1",
+      "model": "gpt-5",
+      "object": "chat.completion.chunk",
+      "provider": "cursor",
+      "usage": {
+        "completion_tokens": 5,
+        "prompt_tokens": 10,
+        "total_tokens": 15
+      }
+    }
+  ],
+  "done": true,
+  "text": "hello world"
+}

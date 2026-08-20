@@ -1,0 +1,6 @@
+{
+  "agentId": "agent-1",
+  "model": {
+    "id": "gpt-5"
+  }
+}
