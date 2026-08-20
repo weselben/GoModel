@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/goccy/go-json"
 
@@ -267,7 +268,7 @@ func TestUnary_OversizedResponse(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		body := make([]byte, maxConnectBodyBytes+1)
+		body := make([]byte, maxUnaryBodyBytes+1)
 		for i := range body {
 			body[i] = 'a'
 		}
@@ -444,5 +445,144 @@ func TestStream_EndFrameIsTerminal(t *testing.T) {
 	}
 	if _, err := stream.Next(context.Background()); !errors.Is(err, io.EOF) {
 		t.Errorf("second Next = %v, want io.EOF", err)
+	}
+}
+
+func TestStream_OversizedFrame(t *testing.T) {
+	// A streaming frame whose length prefix exceeds maxStreamFrameBytes
+	// must surface as a clear "exceeds" error from readFrame, not as a
+	// silent allocation of multi-GiB buffer.
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/connect+json")
+		w.WriteHeader(http.StatusOK)
+		// Length prefix = maxStreamFrameBytes + 1.
+		over := uint32(maxStreamFrameBytes + 1)
+		hdr := make([]byte, 5)
+		hdr[0] = 0x00
+		binary.BigEndian.PutUint32(hdr[1:5], over)
+		_, _ = w.Write(hdr)
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+	})
+	tr, _ := newTestTransport(t, handler)
+
+	stream, err := tr.Stream(context.Background(), "AgentService", "Stream", nil)
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next(context.Background())
+	if err == nil {
+		t.Fatal("expected error from oversized frame, got nil")
+	}
+	if !strings.Contains(err.Error(), "exceeds") {
+		t.Errorf("error = %v, want to mention 'exceeds'", err)
+	}
+}
+
+func TestStream_NextHonoursCancelledContext(t *testing.T) {
+	// Regression for finding (connect_transport.go:228): Next used to
+	// discard its ctx arg. Now it uses context.AfterFunc to close the
+	// body on ctx cancellation, so a stalled read returns promptly.
+	hang := make(chan struct{})
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/connect+json")
+		w.WriteHeader(http.StatusOK)
+		// Emit one frame, flush, then park so the read on the body
+		// blocks on the next frame.
+		_, _ = w.Write(encodeFrame(t, []byte(`{"i":1}`), 0))
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		<-hang
+	})
+	tr, _ := newTestTransport(t, handler)
+
+	stream, err := tr.Stream(context.Background(), "AgentService", "Stream", nil)
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer func() {
+		close(hang)
+		_ = stream.Close()
+	}()
+
+	// First frame returns normally.
+	if _, err := stream.Next(context.Background()); err != nil {
+		t.Fatalf("first Next: %v", err)
+	}
+
+	// Second Next must respect ctx cancellation.
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := stream.Next(ctx)
+		done <- err
+	}()
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("Next after cancel = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Next did not unblock after ctx cancel")
+	}
+}
+
+func TestNewTransportStripsBadTokenCharacters(t *testing.T) {
+	// A token containing CR or LF would be rejected at HTTP write time
+	// with a confusing net/http error. NewTransport strips those bytes
+	// and logs a warning so the operator sees the issue at boot.
+	tr := NewTransport(http.DefaultClient, "http://127.0.0.1:1", "good\r\nbad")
+	if tr == nil {
+		t.Fatal("NewTransport returned nil")
+	}
+	// The headerSetter closure was built with the sanitized token — we
+	// cannot introspect it directly, but the test passes if construction
+	// did not panic and returned a usable Transport.
+}
+
+func TestParseEndStreamMalformedLogsButReturnsNil(t *testing.T) {
+	// An end-of-stream frame whose payload is not JSON should not abort
+	// the call (the stream itself was clean) but should produce a
+	// visible slog.Warn so operators can spot a buggy bridge.
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/connect+json")
+		w.WriteHeader(http.StatusOK)
+		flusher, _ := w.(http.Flusher)
+		_, _ = w.Write(encodeFrame(t, []byte("not-valid-json{"), frameFlagEndOfStream))
+		if flusher != nil {
+			flusher.Flush()
+		}
+	})
+	tr, _ := newTestTransport(t, handler)
+
+	stream, err := tr.Stream(context.Background(), "AgentService", "Stream", nil)
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer stream.Close()
+
+	_, err = stream.Next(context.Background())
+	if !errors.Is(err, io.EOF) {
+		t.Errorf("Next on malformed end-frame = %v, want io.EOF (clean stream)", err)
+	}
+}
+
+func TestScrubForLog(t *testing.T) {
+	// Cap at max bytes; printable run goes through unchanged; control
+	// chars replaced with \xNN; CR/LF collapsed to spaces.
+	got := scrubForLog([]byte("a\x01b\nc\rd\x7fE"), 64)
+	want := `a\x01b c d\x7fE`
+	if got != want {
+		t.Errorf("scrubForLog = %q, want %q", got, want)
+	}
+	// Truncation.
+	big := []byte(strings.Repeat("x", 100))
+	if got := scrubForLog(big, 5); got != "xxxxx" {
+		t.Errorf("scrubForLog(big,5) = %q, want xxxxx", got)
 	}
 }

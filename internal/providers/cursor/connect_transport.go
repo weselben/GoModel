@@ -22,7 +22,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/goccy/go-json"
 
@@ -39,9 +41,16 @@ const (
 	frameFlagCompressed  byte = 0x01
 	frameFlagEndOfStream byte = 0x02
 
-	// Bridge responses are small JSON frames; cap reads to keep a
-	// misbehaving upstream from buffering us into the ground.
-	maxConnectBodyBytes = 1 << 20
+	// maxUnaryBodyBytes caps a successful unary response body. Bridge
+	// unary responses are small JSON objects; this bound exists only to
+	// keep a misbehaving upstream from buffering us into the ground.
+	maxUnaryBodyBytes = 1 << 20
+
+	// maxStreamFrameBytes caps a single streaming envelope frame. Bridge
+	// streaming payloads can be large — multi-MB assistant texts, tool
+	// output blobs — so the streaming cap is intentionally an order of
+	// magnitude larger than the unary cap.
+	maxStreamFrameBytes = 8 << 20
 )
 
 // Transport issues Connect RPCs against a cursor-sdk-bridge endpoint.
@@ -53,7 +62,17 @@ type Transport struct {
 // NewTransport returns a Transport that talks to the bridge at baseURL,
 // authenticating with bearer token. Pass a nil httpClient to use
 // llmclient's default; tests inject a client that targets httptest.Server.
+//
+// The bearer token is captured in the headerSetter closure; if it
+// contains CR/LF Go's http package rejects the request at write time
+// with a confusing error. Guard the constructor: strip CR/LF and log
+// a warning so the operator sees the issue during boot, not deep
+// inside a request.
 func NewTransport(httpClient *http.Client, baseURL, token string) *Transport {
+	if strings.ContainsAny(token, "\r\n") {
+		slog.Warn("cursor: bearer token contained CR/LF; stripping before use — set CURSOR_BRIDGE_TOKEN to a clean value")
+		token = strings.NewReplacer("\r", "", "\n", "").Replace(token)
+	}
 	client := llmclient.NewWithHTTPClient(
 		httpClient,
 		llmclient.DefaultConfig("cursor", baseURL),
@@ -103,9 +122,9 @@ func (t *Transport) Unary(ctx context.Context, service, method string, req, resp
 	// Reject oversized successful bodies with a clear error rather than
 	// letting the subsequent unmarshal fail with a confusing syntax
 	// complaint.
-	if len(httpResp.Body) > maxConnectBodyBytes {
+	if len(httpResp.Body) > maxUnaryBodyBytes {
 		return core.NewProviderError("cursor", http.StatusBadGateway,
-			fmt.Sprintf("cursor: unary response exceeds %d bytes", maxConnectBodyBytes), nil)
+			fmt.Sprintf("cursor: unary response exceeds %d bytes", maxUnaryBodyBytes), nil)
 	}
 
 	if resp != nil {
@@ -191,15 +210,22 @@ func newStreamReader(body io.ReadCloser) *StreamReader {
 
 // Next returns the next envelope payload. It returns io.EOF on a clean
 // end-of-stream frame, or a typed error parsed from an error-bearing end
-// frame. The ctx parameter is reserved for future cancellation hooks; the
-// underlying body read already honours the request context.
+// frame. The ctx parameter is honoured: a cancellation closes the body
+// so an in-progress block read returns immediately.
 func (r *StreamReader) Next(ctx context.Context) (json.RawMessage, error) {
-	_ = ctx
 	if r.done {
 		// We already consumed the terminal frame on a previous call; never
 		// hand it back twice.
 		return nil, io.EOF
 	}
+	// Wire ctx into the body so a caller cancel unblocks a stalled read.
+	// AfterFunc is no-op when ctx is already cancelled or done; using it
+	// keeps the happy path cheap (no extra goroutine unless we are
+	// actively blocking on ctx.Done).
+	stop := context.AfterFunc(ctx, func() {
+		_ = r.Close()
+	})
+	defer stop()
 	for {
 		flags, payload, err := readFrame(r.body)
 		if err != nil {
@@ -208,6 +234,9 @@ func (r *StreamReader) Next(ctx context.Context) (json.RawMessage, error) {
 				// treat as a clean stream end. Any end-frame error has
 				// already been surfaced on the call that consumed it.
 				return nil, io.EOF
+			}
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
 			}
 			return nil, err
 		}
@@ -262,8 +291,8 @@ func readFrame(r io.Reader) (flags byte, payload []byte, err error) {
 	if length == 0 {
 		return flags, nil, nil
 	}
-	if int64(length) > maxConnectBodyBytes {
-		return flags, nil, fmt.Errorf("cursor: envelope frame length %d exceeds %d bytes", length, maxConnectBodyBytes)
+	if int64(length) > maxStreamFrameBytes {
+		return flags, nil, fmt.Errorf("cursor: envelope frame length %d exceeds %d bytes", length, maxStreamFrameBytes)
 	}
 	payload = make([]byte, length)
 	if _, err = io.ReadFull(r, payload); err != nil {
@@ -293,8 +322,12 @@ func parseEndStream(payload []byte) error {
 	if err := json.Unmarshal(payload, &es); err != nil {
 		// Malformed end-frame payload is treated as a clean end: the stream
 		// itself was not in error, we just cannot decode the trailing
-		// metadata. Surfacing a hard error here would punish every caller
-		// for a benign bridge bug.
+		// metadata. Log a warning so operators can spot a buggy bridge;
+		// raw bytes are scrubbed (capped + binary-truncated) to keep this
+		// log safe to ship.
+		slog.Warn("cursor: malformed end-of-stream frame from bridge",
+			"err", err.Error(),
+			"raw_preview", scrubForLog(payload, 256))
 		return nil
 	}
 	if es.Error == nil || (es.Error.Code == "" && es.Error.Message == "") {
@@ -307,4 +340,27 @@ func parseEndStream(payload []byte) error {
 		gw = gw.WithCode(es.Error.Code)
 	}
 	return gw
+}
+
+// scrubForLog returns a printable preview of payload, capped at max bytes
+// and with non-printable bytes replaced so it is safe to drop into a log
+// line. Used for the parseEndStream warning where the raw bytes might
+// contain bearer tokens or binary garbage.
+func scrubForLog(payload []byte, max int) string {
+	if len(payload) > max {
+		payload = payload[:max]
+	}
+	var b strings.Builder
+	b.Grow(len(payload))
+	for _, c := range payload {
+		switch {
+		case c == '\t' || c == '\n' || c == '\r':
+			b.WriteByte(' ')
+		case c < 0x20 || c == 0x7f:
+			fmt.Fprintf(&b, "\\x%02x", c)
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
 }
