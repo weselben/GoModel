@@ -586,3 +586,48 @@ func TestScrubForLog(t *testing.T) {
 		t.Errorf("scrubForLog(big,5) = %q, want xxxxx", got)
 	}
 }
+
+func TestUnsupportedErrorMessage(t *testing.T) {
+	ue := &UnsupportedError{Reason: "x is bad"}
+	if ue.Error() != "x is bad" {
+		t.Errorf("Error() = %q, want %q", ue.Error(), "x is bad")
+	}
+}
+
+func TestEncodeRequestFrameRejectsTooLarge(t *testing.T) {
+	// 4 GiB + 1 byte payload exceeds the 32-bit length prefix; the
+	// helper must surface a clear InvalidRequestError, not silently
+	// truncate.
+	huge := make([]byte, 1+0xFFFFFFFF)
+	if _, err := encodeRequestFrame(huge); err == nil {
+		t.Fatal("expected error for oversized payload, got nil")
+	} else if !strings.Contains(err.Error(), "4 GiB") {
+		t.Errorf("error = %v, want to mention 4 GiB limit", err)
+	}
+}
+
+func TestMarshalStreamRequestNilAndInvalid(t *testing.T) {
+	// nil req → "{}" framed exactly once.
+	b, err := marshalStreamRequest(nil)
+	if err != nil {
+		t.Fatalf("marshalStreamRequest(nil): %v", err)
+	}
+	want := encodeFrameForTest([]byte("{}"), 0)
+	if !bytes.Equal(b, want) {
+		t.Errorf("nil req frame = %x, want %x", b, want)
+	}
+
+	// Non-marshalable value (channels) → InvalidRequestError.
+	if _, err := marshalStreamRequest(make(chan int)); err == nil {
+		t.Fatal("expected marshal error, got nil")
+	}
+}
+
+// encodeFrameForTest mirrors encodeFrame inline.
+func encodeFrameForTest(payload []byte, flags byte) []byte {
+	buf := make([]byte, 5+len(payload))
+	buf[0] = flags
+	binary.BigEndian.PutUint32(buf[1:5], uint32(len(payload)))
+	copy(buf[5:], payload)
+	return buf
+}

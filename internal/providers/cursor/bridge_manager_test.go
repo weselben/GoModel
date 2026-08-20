@@ -1,6 +1,7 @@
 package cursor
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -451,6 +452,97 @@ func TestAttachModeNeverTouchesExec(t *testing.T) {
 	// Close is a no-op (returns nil, no SIGTERM to a missing PID).
 	if err := bm.Close(); err != nil {
 		t.Errorf("Close: %v", err)
+	}
+}
+
+func TestBridgeManagerOptionsApplied(t *testing.T) {
+	customClient := &http.Client{Timeout: 7 * time.Second}
+	customSink := &bytes.Buffer{}
+	bm, err := NewAttachedBridgeManager("http://127.0.0.1:1", "CURSOR_BRIDGE_TOKEN",
+		WithHTTPClient(customClient),
+		WithStderrSink(customSink),
+	)
+	if err != nil {
+		t.Fatalf("NewAttachedBridgeManager: %v", err)
+	}
+	if bm.httpClient != customClient {
+		t.Errorf("httpClient not stored")
+	}
+	if bm.stderrSink != customSink {
+		t.Errorf("stderrSink not stored")
+	}
+
+	// WithStderrSink(nil) must reset to io.Discard; nil is a footgun
+	// because drainStderr writes to a nil writer would panic.
+	bm2, err := NewAttachedBridgeManager("http://127.0.0.1:2", "CURSOR_BRIDGE_TOKEN",
+		WithStderrSink(nil),
+	)
+	if err != nil {
+		t.Fatalf("NewAttachedBridgeManager (nil sink): %v", err)
+	}
+	if bm2.stderrSink != io.Discard {
+		t.Errorf("nil sink not reset to io.Discard; got %T", bm2.stderrSink)
+	}
+
+	// WithStartupTimeout and WithShutdownTimeout on managed too.
+	bm3, err := NewManagedBridgeManager("k",
+		WithStartupTimeout(99*time.Millisecond),
+		WithShutdownTimeout(99*time.Millisecond),
+		WithHTTPClient(customClient),
+		WithStderrSink(customSink),
+	)
+	if err != nil {
+		t.Fatalf("NewManagedBridgeManager: %v", err)
+	}
+	if bm3.startupTimeout != 99*time.Millisecond {
+		t.Errorf("startupTimeout = %v", bm3.startupTimeout)
+	}
+	if bm3.shutdownTimeout != 99*time.Millisecond {
+		t.Errorf("shutdownTimeout = %v", bm3.shutdownTimeout)
+	}
+	if bm3.stderrSink != customSink {
+		t.Errorf("managed stderrSink not stored")
+	}
+}
+
+func TestDrainStderrReturnsOnEOF(t *testing.T) {
+	// The drain returns when the reader is exhausted; the sink sees
+	// every byte before that point.
+	var got bytes.Buffer
+	src := strings.NewReader("line1\nline2\n")
+	drainStderr(src, &got)
+	if got.String() != "line1\nline2\n" {
+		t.Errorf("sink = %q, want %q", got.String(), "line1\nline2\n")
+	}
+
+	// nil sink is replaced with io.Discard inside drainStderr.
+	drainStderr(strings.NewReader("ignored"), nil)
+}
+
+func TestParseReadyLineUsesAuthTokenFile(t *testing.T) {
+	// AuthTokenFile is preferred over AuthToken when both are present.
+	tmp := t.TempDir()
+	tokFile := filepath.Join(tmp, "auth")
+	if err := os.WriteFile(tokFile, []byte("  file-token\n"), 0o600); err != nil {
+		t.Fatalf("write token: %v", err)
+	}
+	payload := `{"schemaVersion":1,"transport":"tcp","protocol":"connect","url":"http://h:1","authToken":"inline-token","authTokenFile":"` + tokFile + `"}`
+	endpt, tok, err := parseReadyLine(payload)
+	if err != nil {
+		t.Fatalf("parseReadyLine: %v", err)
+	}
+	if endpt != "http://h:1" {
+		t.Errorf("endpoint = %q", endpt)
+	}
+	if tok != "file-token" {
+		t.Errorf("token = %q, want file-token (AuthTokenFile wins)", tok)
+	}
+
+	// Missing auth token file → clear error.
+	payload2 := `{"schemaVersion":1,"transport":"tcp","protocol":"connect","url":"http://h:1","authTokenFile":"/nonexistent/file"}`
+	if _, _, err := parseReadyLine(payload2); err == nil ||
+		!strings.Contains(err.Error(), "auth token file") {
+		t.Errorf("expected auth-token-file error, got %v", err)
 	}
 }
 
