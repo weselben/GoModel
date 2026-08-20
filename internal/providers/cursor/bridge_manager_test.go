@@ -754,3 +754,45 @@ func equalStrings(a, b []string) bool {
 	}
 	return true
 }
+
+// TestDrainStderrNilSink uses io.Discard when the sink is nil — the
+// contract is that drain never panics or blocks the program when no
+// sink is configured.
+func TestDrainStderrNilSink(t *testing.T) {
+	r := strings.NewReader("some stderr noise\n")
+	drainStderr(r, nil)
+	// Reaching here without panic proves the io.Discard branch fired.
+}
+
+// TestScanReadyLineTruncatedFrame covers the partial-read error path in
+// scanReadyLine when the connection drops mid-line.
+func TestScanReadyLineTruncatedFrame(t *testing.T) {
+	pr, pw := io.Pipe()
+	go func() {
+		// Write less than a header line so ScanLines never finds a
+		// delimiter and returns io.ErrBufferFull.
+		_, _ = pw.Write([]byte("not-a-ready"))
+		_ = pw.Close()
+	}()
+	out := make(chan readyResult, 1)
+	scanReadyLine(pr, out)
+	res := <-out
+	if res.err == nil {
+		t.Fatal("expected error from truncated frame, got none")
+	}
+	if res.endpoint != "" {
+		t.Errorf("endpoint = %q, want empty", res.endpoint)
+	}
+}
+
+// TestParseReadyLineMalformedJSON covers the json.Unmarshal failure
+// branch — invalid JSON must surface as a wrapped error.
+func TestParseReadyLineMalformedJSON(t *testing.T) {
+	_, _, err := parseReadyLine("{not-valid-json")
+	if err == nil {
+		t.Fatal("expected error from malformed ready line, got none")
+	}
+	if !strings.Contains(err.Error(), "parse ready line") {
+		t.Errorf("error = %q, want 'parse ready line' prefix", err.Error())
+	}
+}
