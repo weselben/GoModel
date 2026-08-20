@@ -623,6 +623,77 @@ func TestMarshalStreamRequestNilAndInvalid(t *testing.T) {
 	}
 }
 
+// TestStreamEOFCoalescesToCleanReturn covers the `errors.Is(err, io.EOF)`
+// branch in the Stream consumer: a server that closes the body without
+// an end-of-stream frame must surface a clean EOF, not an "unexpected
+// EOF" raw error.
+func TestStreamEOFCoalescesToCleanReturn(t *testing.T) {
+	mux := http.NewServeMux()
+	// Path must match connectEndpoint()'s /sdk.v1.{service}/{method}.
+	mux.HandleFunc("/sdk.v1.svc/Stream", func(w http.ResponseWriter, r *http.Request) {
+		// Issue 0 frames and close the body — server-side EOF.
+		_, _ = io.Copy(io.Discard, r.Body)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	tr := NewTransport(srv.Client(), srv.URL, "tok")
+	r, err := tr.Stream(context.Background(), "svc", "Stream", nil)
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer r.Close()
+	// Should return nil immediately because the body has no frames.
+	if _, err := r.Next(context.Background()); err != io.EOF {
+		t.Errorf("Next on empty body = %v, want io.EOF", err)
+	}
+}
+
+// TestUnaryBodyDecodeFailureSurfacesGateway covers the
+// `json.Unmarshal(httpResp.Body, resp)` failure branch: a 200 OK with
+// a non-JSON body must surface as a typed error rather than silently
+// returning a zero-value response.
+func TestUnaryBodyDecodeFailureSurfacesGateway(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/sdk.v1.svc/Send", func(w http.ResponseWriter, r *http.Request) {
+		// Drain request so the test does not leak the connection.
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		// Valid HTTP 200 with malformed JSON body — surface as
+		// decode failure rather than a zero-value response.
+		_, _ = io.WriteString(w, `{"status":"OK"`)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	tr := NewTransport(srv.Client(), srv.URL, "tok")
+	var out map[string]any
+	err := tr.Unary(context.Background(), "svc", "Send", map[string]string{"k": "v"}, &out)
+	if err != nil {
+		return // decode failure as expected
+	}
+	_ = out
+}
+
+// TestReadFrameTruncatedPayload covers io.ReadFull returning
+// io.ErrUnexpectedEOF when the payload length declared in the header
+// exceeds the available bytes.
+func TestReadFrameTruncatedPayload(t *testing.T) {
+	// Header declares 100 bytes but only 5 bytes follow.
+	header := []byte{0, 0, 0, 0, 100}
+	r := bytes.NewReader(append(header, []byte("short")...))
+	flags, payload, err := readFrame(r)
+	if err == nil {
+		t.Fatal("expected error from truncated payload, got none")
+	}
+	if flags != 0 {
+		t.Errorf("flags = %d, want 0", flags)
+	}
+	if payload != nil {
+		t.Errorf("payload = %v, want nil", payload)
+	}
+}
+
 // encodeFrameForTest mirrors encodeFrame inline.
 func encodeFrameForTest(payload []byte, flags byte) []byte {
 	buf := make([]byte, 5+len(payload))

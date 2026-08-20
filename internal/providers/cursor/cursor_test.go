@@ -871,3 +871,333 @@ func TestFlattenHistory(t *testing.T) {
 		t.Errorf("flattenHistory(nil) = %q, want empty", got)
 	}
 }
+
+// TestChatCompletion_NilRequestSurfacesInvalidRequest exercises the
+// `req == nil` guard at the top of ChatCompletion. Calling ChatCompletion
+// without a request must surface an InvalidRequest error rather than
+// panic, even on a closed transport (the nil guard short-circuits first).
+func TestChatCompletion_NilRequestSurfacesInvalidRequest(t *testing.T) {
+	rs := newReplayServer(t, func(w http.ResponseWriter, path string, body []byte) {
+		t.Fatalf("server should not be called for nil request: %s", path)
+	})
+	p := rs.provider(t)
+	resp, err := p.ChatCompletion(context.Background(), nil)
+	if err == nil {
+		t.Fatalf("expected error from nil request")
+	}
+	if resp != nil {
+		t.Errorf("response = %v, want nil", resp)
+	}
+	var gw *core.GatewayError
+	if !errors.As(err, &gw) {
+		t.Errorf("error type = %T (%v), want *core.GatewayError", err, err)
+	}
+	if gw.StatusCode != http.StatusBadRequest {
+		t.Errorf("StatusCode = %d, want 400", gw.StatusCode)
+	}
+}
+
+// TestStreamChatCompletion_NilRequestSurfacesInvalidRequest covers the
+// matching guard at the top of StreamChatCompletion.
+func TestStreamChatCompletion_NilRequestSurfacesInvalidRequest(t *testing.T) {
+	rs := newReplayServer(t, func(w http.ResponseWriter, path string, body []byte) {
+		t.Fatalf("server should not be called for nil request: %s", path)
+	})
+	p := rs.provider(t)
+	body, err := p.StreamChatCompletion(context.Background(), nil)
+	if err == nil {
+		t.Fatalf("expected error from nil stream request")
+	}
+	if body != nil {
+		_ = body.Close()
+		t.Errorf("body = %v, want nil", body)
+	}
+	var gw *core.GatewayError
+	if !errors.As(err, &gw) {
+		t.Errorf("error type = %T (%v), want *core.GatewayError", err, err)
+	}
+	if gw.StatusCode != http.StatusBadRequest {
+		t.Errorf("StatusCode = %d, want 400", gw.StatusCode)
+	}
+}
+
+// TestCreateAgent_MissingAgentIDReturnsBadGateway hits the
+// `out.AgentID == ""` branch in createAgent — a successful RPC that
+// returns a payload with no agent_id. The provider must surface a
+// BadGateway so the caller can distinguish it from a transport failure.
+func TestCreateAgent_MissingAgentIDReturnsBadGateway(t *testing.T) {
+	rs := newReplayServer(t, func(w http.ResponseWriter, path string, body []byte) {
+		if path == "/sdk.v1.SdkAgentService/CreateAgent" {
+			writeUnaryJSON(w, `{"agent_id":""}`)
+			return
+		}
+		t.Errorf("unexpected request: %s", path)
+		t.FailNow()
+	})
+	p := rs.provider(t)
+	_, err := p.ChatCompletion(context.Background(), &core.ChatRequest{
+		Model:    "composer-2.5",
+		Messages: []core.Message{{Role: "user", Content: "hi"}},
+	})
+	if err == nil {
+		t.Fatal("expected error from missing agent_id")
+	}
+	var gw *core.GatewayError
+	if !errors.As(err, &gw) {
+		t.Fatalf("error type = %T (%v), want *core.GatewayError", err, err)
+	}
+	if gw.StatusCode != http.StatusBadGateway {
+		t.Errorf("StatusCode = %d, want 502", gw.StatusCode)
+	}
+}
+
+// TestWorkspaceOrDefaultFallsBackThroughTemp exercises the fallback
+// chain when the bridge manager reports an empty workspace and
+// os.TempDir() also returns empty. The contract: a non-empty fallback
+// path is always returned so callers can blindly concatenate paths.
+func TestWorkspaceOrDefaultFallsBackThroughTemp(t *testing.T) {
+	rs := newReplayServer(t, func(w http.ResponseWriter, path string, body []byte) {})
+	p := rs.provider(t)
+
+	t.Setenv("TMPDIR", "")
+	ws := p.workspaceOrDefault()
+	if ws == "" {
+		t.Errorf("workspaceOrDefault = empty, want non-empty fallback")
+	}
+}
+
+// TestListModels_ZeroResultsEmpty exercises the success path with an
+// empty model list returned by the bridge.
+func TestListModels_ZeroResultsEmpty(t *testing.T) {
+	rs := newReplayServer(t, func(w http.ResponseWriter, path string, body []byte) {
+		if strings.HasSuffix(path, "/ListModels") {
+			writeUnaryJSON(w, `{"models":[]}`)
+			return
+		}
+		t.Errorf("unexpected request: %s", path)
+		t.FailNow()
+	})
+	p := rs.provider(t)
+	models, err := p.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+	if models == nil {
+		t.Fatal("models = nil, want non-nil empty response")
+	}
+	if len(models.Data) != 0 {
+		t.Errorf("models.Data = %v, want empty", models.Data)
+	}
+}
+
+// TestListModels_WireErrorSurfacesBadGateway covers the `tr.Unary`
+// failure path in ListModels: a 4xx from the bridge must surface as a
+// typed GatewayError, not a generic transport error.
+func TestListModels_WireErrorSurfacesBadGateway(t *testing.T) {
+	rs := newReplayServer(t, func(w http.ResponseWriter, path string, body []byte) {
+		if strings.HasSuffix(path, "/ListModels") {
+			http.Error(w, `{"code":"internal","message":"bridge boom"}`, http.StatusInternalServerError)
+			return
+		}
+		t.Errorf("unexpected request: %s", path)
+		t.FailNow()
+	})
+	p := rs.provider(t)
+	_, err := p.ListModels(context.Background())
+	if err == nil {
+		t.Fatal("expected error from 500")
+	}
+	var gw *core.GatewayError
+	if !errors.As(err, &gw) {
+		t.Fatalf("error type = %T (%v), want *core.GatewayError", err, err)
+	}
+}
+
+// TestExtractAssistantText_EmptyPayloadNoop covers the early-return path
+// in extractAssistantText when the assistant frame carries no JSON
+// payload — should be a no-op rather than a parse error.
+func TestExtractAssistantText_EmptyPayloadNoop(t *testing.T) {
+	var b strings.Builder
+	extractAssistantText(nil, &b)
+	if b.Len() != 0 {
+		t.Errorf("empty payload: builder = %q, want empty", b.String())
+	}
+	extractAssistantText(json.RawMessage{}, &b)
+	if b.Len() != 0 {
+		t.Errorf("zero-length payload: builder = %q, want empty", b.String())
+	}
+}
+
+// TestExtractAssistantText_MalformedSkipped covers the unmarshal-error
+// silent skip in extractAssistantText — a malformed assistant frame
+// should not panic or propagate the error.
+func TestExtractAssistantText_MalformedSkipped(t *testing.T) {
+	var b strings.Builder
+	extractAssistantText(json.RawMessage(`{not valid`), &b)
+	if b.Len() != 0 {
+		t.Errorf("malformed payload: builder = %q, want empty", b.String())
+	}
+}
+
+// TestNewWithHTTPClient_NilClientUsesDefault exercises the
+// `httpClient == nil` branch — NewWithHTTPClient accepts nil and uses
+// the package-level default HTTP client instead.
+func TestNewWithHTTPClient_NilClientUsesDefault(t *testing.T) {
+	t.Setenv(AttachTokenEnv, "tok")
+	p, err := NewWithHTTPClient("cursor-key", "http://127.0.0.1:1", nil, llmclient.Hooks{})
+	if err != nil {
+		t.Fatalf("NewWithHTTPClient(nil client): %v", err)
+	}
+	if p == nil {
+		t.Fatal("provider = nil, want non-nil")
+	}
+	if p.httpClient == nil {
+		t.Error("provider.httpClient = nil, want default client")
+	}
+	_ = p.Close()
+}
+
+// TestNew_ReturnsNonNilProvider exercises the New() factory path with a
+// minimal config — the factory should accept the simplest config and
+// surface a usable provider. The token env is set to avoid the
+// auth-required init path.
+func TestNew_ReturnsNonNilProvider(t *testing.T) {
+	t.Setenv(AttachTokenEnv, "tok")
+	p := New(providers.ProviderConfig{Type: "cursor", APIKey: "cursor-key", BaseURL: "http://127.0.0.1:1"},
+		providers.ProviderOptions{})
+	if p == nil {
+		t.Fatal("provider = nil, want non-nil")
+	}
+}
+
+// TestChatCompletion_NoTerminalResultSurfacesBadGateway covers the
+// `terminal == nil` branch in runSend — a stream that completes (EOF)
+// without ever sending a Result frame must surface as 502 BadGateway
+// instead of returning an empty response.
+func TestChatCompletion_NoTerminalResultSurfacesBadGateway(t *testing.T) {
+	rs := newReplayServer(t, func(w http.ResponseWriter, path string, body []byte) {
+		switch {
+		case path == "/sdk.v1.SdkAgentService/CreateAgent":
+			writeUnaryJSON(w, `{"agent_id":"agent-no-term"}`)
+		case path == "/sdk.v1.SdkAgentService/Send":
+			// Issue only assistant frames then end-of-stream — no Result.
+			writeStream(w,
+				`{"sdkMessage":{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}}`,
+			)
+			// End-of-stream frame.
+			w.Write([]byte{0x02, 0x00, 0x00, 0x00, 0x00})
+		case path == "/sdk.v1.SdkAgentService/CloseAgent":
+			writeUnaryJSON(w, `{}`)
+		default:
+			t.Errorf("unexpected path: %s", path)
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	})
+	p := rs.provider(t)
+	_, err := p.ChatCompletion(context.Background(), &core.ChatRequest{
+		Model:    "composer-2.5",
+		Messages: []core.Message{{Role: "user", Content: "hi"}},
+	})
+	if err == nil {
+		t.Fatal("expected error from stream with no terminal")
+	}
+	var gw *core.GatewayError
+	if !errors.As(err, &gw) {
+		t.Fatalf("error type = %T (%v), want *core.GatewayError", err, err)
+	}
+	if gw.StatusCode != http.StatusBadGateway {
+		t.Errorf("StatusCode = %d, want 502", gw.StatusCode)
+	}
+}
+
+// TestStreamChatCompletion_NoTerminalResultEmitsGatewayError covers
+// the same `terminal == nil` branch on the streaming path.
+func TestStreamChatCompletion_NoTerminalResultEmitsGatewayError(t *testing.T) {
+	rs := newReplayServer(t, func(w http.ResponseWriter, path string, body []byte) {
+		switch {
+		case path == "/sdk.v1.SdkAgentService/CreateAgent":
+			writeUnaryJSON(w, `{"agent_id":"agent-no-term"}`)
+		case path == "/sdk.v1.SdkAgentService/Send":
+			writeStream(w,
+				`{"sdkMessage":{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}}`,
+			)
+			w.Write([]byte{0x02, 0x00, 0x00, 0x00, 0x00})
+		case path == "/sdk.v1.SdkAgentService/CloseAgent":
+			writeUnaryJSON(w, `{}`)
+		default:
+			t.Errorf("unexpected path: %s", path)
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	})
+	p := rs.provider(t)
+	body, err := p.StreamChatCompletion(context.Background(), &core.ChatRequest{
+		Model:    "composer-2.5",
+		Messages: []core.Message{{Role: "user", Content: "hi"}},
+	})
+	if err == nil {
+		t.Fatal("expected error from stream with no terminal")
+	}
+	if body != nil {
+		_ = body.Close()
+	}
+	var gw *core.GatewayError
+	if !errors.As(err, &gw) {
+		t.Fatalf("error type = %T (%v), want *core.GatewayError", err, err)
+	}
+	if gw.StatusCode != http.StatusBadGateway {
+		t.Errorf("StatusCode = %d, want 502", gw.StatusCode)
+	}
+}
+
+// TestRunSend_StreamWireErrorSurfacesBadGateway covers the
+// `stream.Next` failure path inside runSend — a 5xx from the bridge
+// during streaming must propagate as a typed error.
+func TestRunSend_StreamWireErrorSurfacesBadGateway(t *testing.T) {
+	rs := newReplayServer(t, func(w http.ResponseWriter, path string, body []byte) {
+		switch {
+		case path == "/sdk.v1.SdkAgentService/CreateAgent":
+			writeUnaryJSON(w, `{"agent_id":"a"}`)
+		case path == "/sdk.v1.SdkAgentService/Send":
+			http.Error(w, `{"code":"unavailable","message":"bridge down"}`, http.StatusServiceUnavailable)
+		case path == "/sdk.v1.SdkAgentService/CloseAgent":
+			writeUnaryJSON(w, `{}`)
+		default:
+			t.Errorf("unexpected path: %s", path)
+		}
+	})
+	p := rs.provider(t)
+	_, err := p.ChatCompletion(context.Background(), &core.ChatRequest{
+		Model:    "composer-2.5",
+		Messages: []core.Message{{Role: "user", Content: "hi"}},
+	})
+	if err == nil {
+		t.Fatal("expected error from stream wire 5xx")
+	}
+}
+
+// TestTransport_NilHTTPClientInAttachModeFallsBack exercises the
+// `hc == nil` branch inside transport() when no bridge manager is
+// attached — the package default client must be used.
+func TestTransport_NilHTTPClientInAttachModeFallsBack(t *testing.T) {
+	t.Setenv(AttachTokenEnv, "tok")
+	p, err := NewWithHTTPClient("cursor-key", "http://127.0.0.1:1", nil, llmclient.Hooks{})
+	if err != nil {
+		t.Fatalf("NewWithHTTPClient: %v", err)
+	}
+	defer p.Close()
+
+	// Force transport() to be called without a managed bridge. The
+	// AttachTokenEnv above means an attach-mode Manager exists but
+	// has no started endpoint — transport should still hand back a
+	// usable Transport rooted at the base URL.
+	tr, err := p.transport(context.Background())
+	if err != nil {
+		// Surfaces a startFailure here when bridge attach cannot bring
+		// up an endpoint — also acceptable: the contract is that this
+		// returns a *Transport or a typed error, never a panic.
+		return
+	}
+	if tr == nil {
+		t.Error("transport returned nil with no error")
+	}
+}

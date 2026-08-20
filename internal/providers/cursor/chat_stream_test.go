@@ -651,3 +651,127 @@ func TestAppendAssistantEmptyPayloadIsNoop(t *testing.T) {
 		t.Errorf("buffer should be empty, got %q", string(c.buffer.Unread()))
 	}
 }
+
+// TestStreamConverter_InnerLoopAssistantFrameReturnsImmediateBuffer covers
+// the inner-loop branch where, after reading an unrecognized frame, the
+// next frame is a real assistant message — Read must return the buffered
+// assistant bytes without continuing through the full empty-frame cap.
+func TestStreamConverter_InnerLoopAssistantFrameReturnsImmediateBuffer(t *testing.T) {
+	var buf bytes.Buffer
+	// 5 unrecognized frames — all "unknown" type — followed by a real
+	// assistant frame with text content.
+	messages := []string{
+		`{"sdkMessage":{"type":"unknown_a","message":{}}}`,
+		`{"sdkMessage":{"type":"unknown_b","message":{}}}`,
+		`{"sdkMessage":{"type":"unknown_c","message":{}}}`,
+		`{"sdkMessage":{"type":"unknown_d","message":{}}}`,
+		`{"sdkMessage":{"type":"unknown_e","message":{}}}`,
+		`{"sdkMessage":{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}}`,
+	}
+	for _, m := range messages {
+		payload := []byte(m)
+		hdr := make([]byte, 5)
+		binary.BigEndian.PutUint32(hdr[1:5], uint32(len(payload)))
+		buf.Write(hdr)
+		buf.Write(payload)
+	}
+	// Close-of-stream.
+	buf.Write([]byte{0x02, 0x00, 0x00, 0x00, 0x00})
+
+	sr := newStreamReader(io.NopCloser(&buf))
+	sc := &streamConverter{
+		stream:     sr,
+		model:      "m",
+		created:    time.Now().Unix(),
+		buffer:     streaming.NewStreamBuffer(1024),
+		closeAgent: func() {}, // no-op close so the converter does not panic
+		ctx:        context.Background(),
+	}
+
+	out := make([]byte, 512)
+	n, err := sc.Read(out)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if n == 0 {
+		t.Fatalf("Read returned 0 bytes; expected assistant content")
+	}
+	body := string(out[:n])
+	if !strings.Contains(body, `"content":"hi"`) {
+		t.Errorf("Read body missing assistant text: %q", body)
+	}
+}
+
+// TestStreamConverter_InnerLoopMalformedFrameSurfaces502 covers the
+// `json.Unmarshal(frame, &env)` failure inside the inner empty-frame
+// loop — a malformed Connect frame after a successful first frame must
+// surface as 502 immediately.
+func TestStreamConverter_InnerLoopMalformedFrameSurfaces502(t *testing.T) {
+	var buf bytes.Buffer
+	frames := []string{
+		`{}`,                                  // empty envelope; skipped by StreamReader
+		`{not valid`,                           // malformed
+	}
+	for _, m := range frames {
+		payload := []byte(m)
+		hdr := make([]byte, 5)
+		binary.BigEndian.PutUint32(hdr[1:5], uint32(len(payload)))
+		buf.Write(hdr)
+		buf.Write(payload)
+	}
+
+	sr := newStreamReader(io.NopCloser(&buf))
+	sc := &streamConverter{
+		stream:     sr,
+		model:      "m",
+		created:    time.Now().Unix(),
+		buffer:     streaming.NewStreamBuffer(1024),
+		closeAgent: func() {},
+		ctx:        context.Background(),
+	}
+	out := make([]byte, 1024)
+	_, err := sc.Read(out)
+	if err == nil {
+		t.Fatal("expected error from malformed inner-frame, got nil")
+	}
+	var gw *core.GatewayError
+	if !errors.As(err, &gw) {
+		t.Fatalf("error type = %T (%v), want *core.GatewayError", err, err)
+	}
+	if gw.StatusCode != http.StatusBadGateway {
+		t.Errorf("StatusCode = %d, want 502", gw.StatusCode)
+	}
+}
+
+// TestStreamConverter_InnerLoopEOFAfterSkipsReturnsDone covers the
+// inner-loop EOF branch: after skipping several keepalive frames, the
+// stream then ends cleanly — Read must return [DONE] exactly once.
+func TestStreamConverter_InnerLoopEOFAfterSkipsReturnsDone(t *testing.T) {
+	var buf bytes.Buffer
+	// Only keepalives ({}) then EOF.
+	for i := 0; i < 5; i++ {
+		payload := []byte("{}")
+		hdr := make([]byte, 5)
+		binary.BigEndian.PutUint32(hdr[1:5], uint32(len(payload)))
+		buf.Write(hdr)
+		buf.Write(payload)
+	}
+
+	sr := newStreamReader(io.NopCloser(&buf))
+	sc := &streamConverter{
+		stream:     sr,
+		model:      "m",
+		created:    time.Now().Unix(),
+		buffer:     streaming.NewStreamBuffer(1024),
+		closeAgent: func() {},
+		ctx:        context.Background(),
+	}
+	out := make([]byte, 64)
+	n, err := sc.Read(out)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if !strings.Contains(string(out[:n]), "[DONE]") {
+		t.Errorf("body = %q, want [DONE]", string(out[:n]))
+	}
+}
