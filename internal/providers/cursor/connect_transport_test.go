@@ -102,6 +102,55 @@ func TestUnary_Success(t *testing.T) {
 	}
 }
 
+// TestUnary_MarshalFailure covers the json.Marshal(req) failure path
+// at the top of Unary — a non-marshalable payload (channel) must
+// surface as a typed InvalidRequestError, never reach the wire.
+func TestUnary_MarshalFailure(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("server should not be called when marshal fails")
+	})
+	tr, _ := newTestTransport(t, handler)
+
+	var out map[string]any
+	err := tr.Unary(context.Background(), "svc", "Send", make(chan int), &out)
+	if err == nil {
+		t.Fatal("expected marshal failure, got nil")
+	}
+	var inv *core.GatewayError
+	if !errors.As(err, &inv) {
+		t.Errorf("error type = %T, want *core.GatewayError", err)
+	}
+}
+
+// TestStream_Non2xxStatus covers the `httpResp.DoStream err` path at
+// the bottom of Stream — a non-2xx response must propagate the
+// transport error rather than silently wrap it.
+func TestStream_Non2xxStatus(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"code":"unavailable","message":"bridge down"}`, http.StatusServiceUnavailable)
+	})
+	tr, _ := newTestTransport(t, handler)
+
+	_, err := tr.Stream(context.Background(), "svc", "Stream", nil)
+	if err == nil {
+		t.Fatal("expected error from 5xx response, got nil")
+	}
+}
+
+// TestParseReadyLineAuthTokenFileReadError covers the
+// `os.ReadFile(r.AuthTokenFile)` failure path — when the bridge
+// points at an auth token file that does not exist or is unreadable,
+// parseReadyLine must surface a wrapped error naming the path.
+func TestParseReadyLineAuthTokenFileReadError(t *testing.T) {
+	_, _, err := parseReadyLine(`{"schemaVersion":1,"transport":"tcp","protocol":"connect","url":"http://h:1","authTokenFile":"/nonexistent/xyzzy.tok"}`)
+	if err == nil {
+		t.Fatal("expected error from missing auth token file, got nil")
+	}
+	if !strings.Contains(err.Error(), "auth token file") {
+		t.Errorf("error = %q, want 'auth token file' substring", err.Error())
+	}
+}
+
 func TestUnary_ConnectErrorMapsToTypedError(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
