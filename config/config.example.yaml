@@ -368,11 +368,10 @@ providers:
   cursor:
     type: cursor
     api_key: "${CURSOR_API_KEY}"
-    # Available model slugs depend on the account tier. Override with the slugs
-    # your plan advertises (or leave unset to discover at runtime).
-    # models:
-    #   - claude-4-sonnet
-    #   - gpt-5
+    # Note: the cursor provider always discovers available slugs via
+    # ListModels at runtime; the optional `models:` field is parsed by
+    # the config layer but is currently cosmetic / reserved for a future
+    # allow-list filter. Leave unset unless that lands.
 
   cohere:
     type: cohere

@@ -62,17 +62,13 @@ cleanly when GoModel stops.
 ## Models
 
 `ListModels` is served from the bridge's `SdkCursorService.ListModels`, so
-`GET /v1/models` returns whatever the account's plan exposes. Pin a static
-list instead when you want a fixed surface:
-
-```bash
-CURSOR_MODELS=composer,auto
-```
-
-Which slugs exist depends on the subscription tier. The **Cursor Models
-pool** (generous included usage) currently includes Composer 2.5 and Grok
-4.5 / 4.6 on Pro and above; a Hobby or trial account may only expose
-`composer` / `auto`. Confirm with a live `GET /v1/models` against your key.
+`GET /v1/models` returns whatever the account's plan exposes. The provider
+always discovers the available slugs at runtime — there is no static-list
+override on the cursor provider. Which slugs exist depends on the
+subscription tier. The **Cursor Models pool** (generous included usage)
+currently includes Composer 2.5 and Grok 4.5 / 4.6 on Pro and above; a
+Hobby or trial account may only expose `composer` / `auto`. Confirm with
+a live `GET /v1/models` against your key.
 
 ## Dialect and limits
 
