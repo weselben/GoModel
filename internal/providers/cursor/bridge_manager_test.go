@@ -534,6 +534,78 @@ func TestScrubbedBridgeEnv(t *testing.T) {
 	}
 }
 
+func TestScrubbedBridgeEnvForwardsProxyEnv(t *testing.T) {
+	// Operators behind a corporate proxy need HTTP(S)_PROXY/NO_PROXY
+	// forwarded to the bridge. Without these the bridge cannot reach
+	// the Cursor APIs.
+	t.Setenv("HTTP_PROXY", "http://proxy.example:8080")
+	t.Setenv("HTTPS_PROXY", "http://proxy.example:8443")
+	t.Setenv("NO_PROXY", "localhost,127.0.0.1,.internal")
+	t.Setenv("http_proxy", "http://lowercase-proxy.example:3128")
+	t.Setenv("https_proxy", "http://lowercase-proxy.example:3129")
+	t.Setenv("no_proxy", "intra.example")
+	t.Setenv("FOO_PROXY", "should-not-leak") // unrelated proxy var
+	env := scrubbedBridgeEnv("child-key")
+	joined := strings.Join(env, "\n")
+	for _, must := range []string{
+		"HTTP_PROXY=http://proxy.example:8080",
+		"HTTPS_PROXY=http://proxy.example:8443",
+		"NO_PROXY=localhost,127.0.0.1,.internal",
+		"http_proxy=http://lowercase-proxy.example:3128",
+		"https_proxy=http://lowercase-proxy.example:3129",
+		"no_proxy=intra.example",
+	} {
+		if !strings.Contains(joined, must) {
+			t.Errorf("env missing proxy var %q\n%s", must, joined)
+		}
+	}
+	if strings.Contains(joined, "FOO_PROXY") {
+		t.Errorf("env leaked unrelated FOO_PROXY: %s", joined)
+	}
+}
+
+func TestAttachModeTrimsTokenWhitespace(t *testing.T) {
+	// Editors commonly inject leading whitespace into .env values; the
+	// bearer would then arrive at the bridge as "  token" and every
+	// Connect RPC would 401 with no clue.
+	t.Setenv("CURSOR_BRIDGE_TOKEN", "  \t test-token \n")
+	bm, err := NewAttachedBridgeManager("http://127.0.0.1:9999", "CURSOR_BRIDGE_TOKEN")
+	if err != nil {
+		t.Fatalf("NewAttachedBridgeManager: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, tok, err := bm.Start(ctx)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if tok != "test-token" {
+		t.Errorf("token = %q, want %q (whitespace must be trimmed)", tok, "test-token")
+	}
+}
+
+func TestScanReadyLineHandlesLongBanner(t *testing.T) {
+	// Some supervisor wrappers print a multi-line banner (>64 KiB) before
+	// the ready line; the scan buffer must accommodate the largest
+	// single line without losing the ready line at the tail.
+	longBanner := strings.Repeat("banner line with some content\n", 20000)
+	ready := `cursor-sdk-bridge ready {"schemaVersion":1,"transport":"tcp","protocol":"connect","url":"http://h:1","authToken":"x"}` + "\n"
+	src := strings.NewReader(longBanner + ready)
+
+	out := make(chan readyResult, 1)
+	scanReadyLine(src, out)
+	res := <-out
+	if res.err != nil {
+		t.Fatalf("scanReadyLine: %v", res.err)
+	}
+	if res.endpoint != "http://h:1" {
+		t.Errorf("endpoint = %q, want http://h:1", res.endpoint)
+	}
+	if res.token != "x" {
+		t.Errorf("token = %q, want x", res.token)
+	}
+}
+
 func TestParseReadyLineRejectsBadSchema(t *testing.T) {
 	cases := []struct {
 		name    string
