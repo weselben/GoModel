@@ -395,10 +395,6 @@ func TestUnsupportedSurfaces(t *testing.T) {
 	p := rs.provider(t)
 
 	cases := map[string]func() error{
-		"StreamChatCompletion": func() error {
-			_, err := p.StreamChatCompletion(context.Background(), &core.ChatRequest{})
-			return err
-		},
 		"Responses": func() error {
 			_, err := p.Responses(context.Background(), &core.ResponsesRequest{})
 			return err
