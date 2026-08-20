@@ -40,6 +40,14 @@ const defaultStartupTimeout = 30 * time.Second
 // shutdownGrace lets the bridge drain in-flight RPCs before SIGTERM.
 const shutdownGrace = 5 * time.Second
 
+// ErrBridgeUnreachable is wrapped around bridge-start failures where the
+// binary itself is missing or not executable (resolveBridgeBinary,
+// exec.LookPath, missing CURSOR_SDK_BRIDGE_BIN). The provider maps these
+// to HTTP 503 Service Unavailable so clients can distinguish "retry
+// later" (the gateway may yet install the binary) from a bad handshake
+// (502 Bad Gateway).
+var ErrBridgeUnreachable = errors.New("cursor bridge unreachable")
+
 // execLookPath is indirection to keep tests free of side-effects.
 var execLookPath = exec.LookPath
 
@@ -325,7 +333,7 @@ func resolveBridgeBinary() (string, error) {
 		if _, err := os.Stat(v); err == nil {
 			return v, nil
 		}
-		return "", fmt.Errorf("CURSOR_SDK_BRIDGE_BIN=%q does not exist", v)
+		return "", fmt.Errorf("%w: CURSOR_SDK_BRIDGE_BIN=%q does not exist", ErrBridgeUnreachable, v)
 	}
 	if path, err := execLookPath("cursor-sdk-bridge"); err == nil {
 		return path, nil
@@ -337,9 +345,9 @@ func resolveBridgeBinary() (string, error) {
 			return candidate, nil
 		}
 	}
-	return "", errors.New("cursor-sdk-bridge not found: set CURSOR_SDK_BRIDGE_BIN, " +
-		"add cursor-sdk-bridge to PATH, or install it under " +
-		"~/.local/share/gomodel/bin/cursor-sdk-bridge")
+	return "", fmt.Errorf("%w: cursor-sdk-bridge not found — set CURSOR_SDK_BRIDGE_BIN, "+
+		"add cursor-sdk-bridge to PATH, or install it under "+
+		"~/.local/share/gomodel/bin/cursor-sdk-bridge", ErrBridgeUnreachable)
 }
 
 // scrubbedBridgeEnv returns the minimal env passed to the bridge child.

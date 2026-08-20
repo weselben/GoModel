@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -452,6 +454,77 @@ func TestListModels(t *testing.T) {
 	options, _ := req["options"].(map[string]any)
 	if got := options["apiKey"]; got != "cursor-key" {
 		t.Errorf("ListModels options.apiKey = %v, want cursor-key", got)
+	}
+}
+
+func TestStartFailure_UnreachableMapsTo503(t *testing.T) {
+	// Bridge binary missing → ErrBridgeUnreachable → 503. The provider
+	// itself never spawns (the constructor returns startErr), so we drive
+	// the failure through ChatCompletion on a fresh provider.
+	t.Setenv("CURSOR_SDK_BRIDGE_BIN", "/nonexistent/cursor-sdk-bridge-bin-for-test")
+	factory := providers.NewProviderFactory()
+	factory.Add(Registration)
+	prov, err := factory.Create(providers.ProviderConfig{Type: "cursor", APIKey: "k"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	_, err = prov.ChatCompletion(context.Background(), &core.ChatRequest{
+		Model:    "composer-2.5",
+		Messages: []core.Message{{Role: "user", Content: "hi"}},
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	var gw *core.GatewayError
+	if !errors.As(err, &gw) {
+		t.Fatalf("error type = %T, want *core.GatewayError", err)
+	}
+	if gw.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("StatusCode = %d, want 503", gw.StatusCode)
+	}
+	if !strings.Contains(gw.Message, "unreachable") {
+		t.Errorf("Message = %q, want to mention unreachable", gw.Message)
+	}
+}
+
+func TestStartFailure_BadResponseMapsTo502(t *testing.T) {
+	// Bridge started but produced a malformed ready line (or crashed).
+	// The resulting error is not ErrBridgeUnreachable, so startFailure
+	// must default to 502 Bad Gateway.
+	rs := newReplayServer(t, func(w http.ResponseWriter, path string, body []byte) {
+		// Hit any RPC path; we are not exercising the bridge manager here.
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	p := rs.provider(t)
+	// Inject a non-unreachable start error via the exported test seam —
+	// a transport() error path that does NOT wrap ErrBridgeUnreachable.
+	p.startErr = errors.New("synthetic: bridge returned bad response")
+	p.startDone = true
+	err := p.startFailure(p.startErr)
+	var gw *core.GatewayError
+	if !errors.As(err, &gw) {
+		t.Fatalf("error type = %T, want *core.GatewayError", err)
+	}
+	if gw.StatusCode != http.StatusBadGateway {
+		t.Errorf("StatusCode = %d, want 502", gw.StatusCode)
+	}
+	// Ensure the inject didn't actually reach the wire.
+	if got := len(rs.calls); got != 0 {
+		t.Errorf("unexpected upstream calls: %d", got)
+	}
+}
+
+func TestStartFailure_UnreachableSentinelIs503(t *testing.T) {
+	// Direct unit test on startFailure: wrapping ErrBridgeUnreachable
+	// must surface 503 regardless of how the provider was constructed.
+	p := &Provider{}
+	err := p.startFailure(fmt.Errorf("%w: simulated", ErrBridgeUnreachable))
+	var gw *core.GatewayError
+	if !errors.As(err, &gw) {
+		t.Fatalf("error type = %T, want *core.GatewayError", err)
+	}
+	if gw.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("StatusCode = %d, want 503", gw.StatusCode)
 	}
 }
 
