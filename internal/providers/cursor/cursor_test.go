@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/goccy/go-json"
 
@@ -320,6 +321,90 @@ func TestChatCompletion_RunError(t *testing.T) {
 	}
 	if gw.Code == nil || *gw.Code != "model_overloaded" {
 		t.Errorf("error code = %v, want model_overloaded", gw.Code)
+	}
+	// Regression for the closeAgent defer leaking agent on cancelled ctx.
+	if gw.StatusCode != http.StatusBadGateway {
+		t.Errorf("StatusCode = %d, want 502", gw.StatusCode)
+	}
+}
+
+func TestChatCompletion_CancelledCtxStillClosesAgent(t *testing.T) {
+	// Regression for finding (cursor.go:234): defer closeAgent used to
+	// reuse the request ctx, which is already cancelled by the time the
+	// defer runs — leaking the agent on the bridge. The fix routes the
+	// cleanup RPC through context.Background() so it survives a cancelled
+	// request. We assert this by parking the Send handler, cancelling the
+	// request ctx, then confirming CloseAgent still lands on the server
+	// with an alive (non-cancelled) request context.
+	releaseSend := make(chan struct{})
+	sendReached := make(chan struct{})
+	gotCloseCtxAlive := make(chan bool, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case createAgentPath:
+			writeUnaryJSON(w, `{"agentId":"agent-1"}`)
+		case sendPath:
+			// Emit one assistant frame, flush, then park until released.
+			close(sendReached)
+			w.Header().Set("Content-Type", "application/connect+json")
+			payload := []byte(`{"sdkMessage":{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}}`)
+			hdr := make([]byte, 5)
+			binary.BigEndian.PutUint32(hdr[1:5], uint32(len(payload)))
+			_, _ = w.Write(hdr)
+			_, _ = w.Write(payload)
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
+			}
+			<-releaseSend
+		case closeAgentPath:
+			// With the fix the cleanup RPC uses context.Background(); the
+			// server-side request ctx is alive when we read its Err().
+			// Without the fix the request ctx is cancelled → Err()==context.Canceled.
+			gotCloseCtxAlive <- r.Context().Err() == nil
+			writeUnaryJSON(w, `{}`)
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+
+	t.Setenv(AttachTokenEnv, "test-token")
+	p, err := NewWithHTTPClient("cursor-key", srv.URL, srv.Client(), llmclient.Hooks{})
+	if err != nil {
+		t.Fatalf("NewWithHTTPClient: %v", err)
+	}
+	defer func() { _ = p.Close() }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	chatDone := make(chan error, 1)
+	go func() {
+		_, err := p.ChatCompletion(ctx, &core.ChatRequest{
+			Model:    "composer-2.5",
+			Messages: []core.Message{{Role: "user", Content: "hi"}},
+		})
+		chatDone <- err
+	}()
+
+	// Wait for Send to enter, cancel, then release Send.
+	select {
+	case <-sendReached:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Send handler was never reached")
+	}
+	cancel()
+	close(releaseSend)
+
+	if err := <-chatDone; err == nil {
+		t.Fatal("expected error from cancelled ctx, got nil")
+	}
+	select {
+	case alive := <-gotCloseCtxAlive:
+		if !alive {
+			t.Fatal("CloseAgent was sent on a cancelled request context; fix did not take")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("CloseAgent never reached the server")
 	}
 }
 
