@@ -1,6 +1,7 @@
 package cursor
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -8,9 +9,12 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/enterpilot/gomodel/internal/core"
+	"github.com/enterpilot/gomodel/internal/streaming"
 )
 
 // readAllSSE drains the converter fully, returning both the emitted
@@ -422,5 +426,228 @@ func TestStreamChatCompletion_CloseReleasesAgent(t *testing.T) {
 
 	if got := rs.countCalls(closeAgentPath); got != 1 {
 		t.Errorf("CloseAgent calls after Close = %d, want 1", got)
+	}
+}
+
+func TestStreamChatCompletion_SendErrorClosesAgent(t *testing.T) {
+	// When Send itself fails (e.g., the bridge rejects the request body
+	// before any frame is streamed), the provider must call CloseAgent
+	// on the background context so the bridge releases the agent even
+	// though the caller never received a body.
+	var closeAgentSeen atomic.Int32
+	rs := newReplayServer(t, func(w http.ResponseWriter, path string, body []byte) {
+		switch path {
+		case createAgentPath:
+			writeUnaryJSON(w, `{"agentId":"agent-1"}`)
+		case sendPath:
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"code":"internal","message":"send failed"}`))
+		case closeAgentPath:
+			closeAgentSeen.Add(1)
+			writeUnaryJSON(w, `{}`)
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	})
+	p := rs.provider(t)
+
+	body, err := p.StreamChatCompletion(context.Background(), &core.ChatRequest{
+		Model:    "composer-2.5",
+		Messages: []core.Message{{Role: "user", Content: "hi"}},
+	})
+	if err == nil {
+		_ = body.Close()
+		t.Fatal("expected error from failed Send")
+	}
+	if body != nil {
+		t.Errorf("body = %v, want nil on send failure", body)
+	}
+	if closeAgentSeen.Load() != 1 {
+		t.Errorf("CloseAgent called %d times, want 1 (release on send error)", closeAgentSeen.Load())
+	}
+}
+
+func TestStreamConverter_TooManyEmptyFramesReturns502(t *testing.T) {
+	// The inner empty-frame loop in chat_stream.go caps at
+	// maxEmptyFramesPerRead (64) before returning "too many empty
+	// frames". Drive the loop with frames that the StreamReader actually
+	// surfaces (an unrecognized sdkMessage type) — `{}` keepalives are
+	// drained by StreamReader.Next internally so they never reach the
+	// converter's inner loop.
+	var buf bytes.Buffer
+	for i := 0; i < 80; i++ {
+		// sdkMessage with an unknown Type — non-empty, not matched by the
+		// converter's switch, so each call to Next returns a fresh frame.
+		payload := []byte(`{"SDKMessage":{"type":"unknown","message":{"text":""}}}`)
+		hdr := make([]byte, 5)
+		binary.BigEndian.PutUint32(hdr[1:5], uint32(len(payload)))
+		buf.Write(hdr)
+		buf.Write(payload)
+	}
+	sr := newStreamReader(io.NopCloser(&buf))
+	sc := &streamConverter{
+		stream:  sr,
+		model:   "m",
+		created: time.Now().Unix(),
+		buffer:  streaming.NewStreamBuffer(1024),
+		ctx:     context.Background(),
+	}
+	readBuf := make([]byte, 1024)
+	n, err := sc.Read(readBuf)
+	t.Logf("Read returned (%d, %v), closed=%v, buffer.Len=%d", n, err, sc.closed, sc.buffer.Len())
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	var gw *core.GatewayError
+	if !errors.As(err, &gw) {
+		t.Fatalf("error type = %T (%v), want *core.GatewayError", err, err)
+	}
+	if gw.StatusCode != http.StatusBadGateway {
+		t.Errorf("StatusCode = %d, want 502", gw.StatusCode)
+	}
+	if !strings.Contains(gw.Message, "too many empty frames") {
+		t.Errorf("Message = %q, want too-many-empty-frames substring", gw.Message)
+	}
+}
+
+func TestStreamConverter_ReadBufferDrainedFirst(t *testing.T) {
+	// When the converter buffer already has bytes, Read returns them
+	// without touching the stream — confirms the "buffer.Len() > 0"
+	// fast path.
+	sc := &streamConverter{
+		model:   "m",
+		created: time.Now().Unix(),
+		buffer:  streaming.NewStreamBuffer(1024),
+		ctx:     context.Background(),
+	}
+	sc.buffer.AppendString("cached bytes")
+	out := make([]byte, 64)
+	n, err := sc.Read(out)
+	if err != nil || n != len("cached bytes") {
+		t.Errorf("Read = (%d, %v); want (%d, nil)", n, err, len("cached bytes"))
+	}
+	if string(out[:n]) != "cached bytes" {
+		t.Errorf("output = %q, want cached bytes", out[:n])
+	}
+}
+
+func TestStreamConverter_ReadAfterCloseIsEOF(t *testing.T) {
+	// Once Close() has run, subsequent Read calls must return EOF
+	// without invoking the stream — this is the "closed" early-return
+	// branch.
+	sc := &streamConverter{
+		model:   "m",
+		created: time.Now().Unix(),
+		buffer:  streaming.NewStreamBuffer(1024),
+		ctx:     context.Background(),
+		closed:  true,
+	}
+	_, err := sc.Read(make([]byte, 16))
+	if !errors.Is(err, io.EOF) {
+		t.Errorf("Read after close = %v, want io.EOF", err)
+	}
+}
+
+func TestStreamConverter_HandleResultNonOK(t *testing.T) {
+	// handleResult must surface cursorRunError for non-OK terminal
+	// statuses, mirroring the runSend path.
+	sc := &streamConverter{
+		model:   "m",
+		created: time.Now().Unix(),
+		buffer:  streaming.NewStreamBuffer(1024),
+		ctx:     context.Background(),
+	}
+	err := sc.handleResult(&runStreamResult{
+		Status: "RUN_LIFECYCLE_STATUS_ERROR",
+		Result: runResult{Result: "boom"},
+	})
+	if err == nil {
+		t.Fatal("expected error from non-OK terminal")
+	}
+	var gw *core.GatewayError
+	if !errors.As(err, &gw) {
+		t.Fatalf("error type = %T, want *core.GatewayError", err)
+	}
+	if gw.StatusCode != http.StatusBadGateway {
+		t.Errorf("StatusCode = %d, want 502", gw.StatusCode)
+	}
+}
+
+func TestStreamConverter_StreamNextError(t *testing.T) {
+	// Connect-protocol HTTP error after the headers (e.g., a 500 from
+	// the bridge mid-stream) surfaces as a non-EOF error from Next.
+	rs := newReplayServer(t, func(w http.ResponseWriter, path string, body []byte) {
+		switch path {
+		case createAgentPath:
+			writeUnaryJSON(w, `{"agentId":"agent-1"}`)
+		case sendPath:
+			w.Header().Set("Content-Type", "application/connect+json")
+			// Emit one assistant frame then abruptly hang up.
+			_, _ = w.Write(frame(assistantFrame("hi")))
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			// Hijack the conn and close it to force an unexpected EOF
+			// on the next read.
+			if hj, ok := w.(http.Hijacker); ok {
+				conn, _, _ := hj.Hijack()
+				_ = conn.Close()
+				return
+			}
+			w.WriteHeader(http.StatusInternalServerError)
+		case closeAgentPath:
+			writeUnaryJSON(w, `{}`)
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	})
+	p := rs.provider(t)
+
+	body, err := p.StreamChatCompletion(context.Background(), &core.ChatRequest{
+		Model:    "composer-2.5",
+		Messages: []core.Message{{Role: "user", Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("StreamChatCompletion: %v", err)
+	}
+	_, err = io.ReadAll(body)
+	// The first frame is read OK, then the connection drops; io.ReadAll
+	// returns the read error from Next (either a wrapped io.ErrUnexpectedEOF
+	// or similar). Accept any non-nil error.
+	if err == nil {
+		t.Fatal("expected error from dropped stream, got nil")
+	}
+}
+
+func TestStreamConverter_NilCloseAgentIsNoOp(t *testing.T) {
+	// releaseAgent must tolerate a nil callback (defensive — the
+	// converter should never be constructed with one, but the guard
+	// makes the type safe to embed).
+	c := &streamConverter{closeAgent: nil}
+	c.releaseAgent() // must not panic
+}
+
+func TestAppendAssistantSkipsEmptyText(t *testing.T) {
+	// An assistant frame with content blocks whose text is empty must
+	// not produce a chunk.
+	c := newStreamConverter(context.Background(), nil, "m", nil)
+	c.appendAssistant([]byte(`{"role":"assistant","content":[{"type":"text","text":""},{"type":"text","text":"hi"}]}`))
+	if c.buffer.Len() == 0 {
+		t.Fatal("expected non-empty buffer")
+	}
+	out := string(c.buffer.Unread())
+	if !strings.Contains(out, `"content":"hi"`) {
+		t.Errorf("buffer = %q, want content=hi", out)
+	}
+}
+
+func TestAppendAssistantEmptyPayloadIsNoop(t *testing.T) {
+	c := newStreamConverter(context.Background(), nil, "m", nil)
+	c.appendAssistant(nil)
+	c.appendAssistant([]byte(""))
+	c.appendAssistant([]byte("not-json"))
+	if c.buffer.Len() != 0 {
+		t.Errorf("buffer should be empty, got %q", string(c.buffer.Unread()))
 	}
 }

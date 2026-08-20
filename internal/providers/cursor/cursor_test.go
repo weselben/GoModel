@@ -528,6 +528,262 @@ func TestStartFailure_UnreachableSentinelIs503(t *testing.T) {
 	}
 }
 
+func TestSetBaseURL_AttachModeRebuildsManager(t *testing.T) {
+	// In attach mode SetBaseURL must rebuild the BridgeManager around
+	// the new endpoint and reset the cached transport.
+	rs := newReplayServer(t, func(w http.ResponseWriter, path string, body []byte) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	p := rs.provider(t)
+	oldMgr := p.manager
+	p.SetBaseURL("")
+	if p.manager != oldMgr {
+		t.Errorf("empty URL should be a no-op; manager was replaced")
+	}
+
+	p.SetBaseURL(rs.srv.URL)
+	if p.manager == oldMgr {
+		t.Errorf("manager was not rebuilt after SetBaseURL")
+	}
+	if p.curURL != rs.srv.URL {
+		t.Errorf("curURL = %q, want %q", p.curURL, rs.srv.URL)
+	}
+	if p.tr != nil {
+		t.Errorf("cached transport not reset; got %+v", p.tr)
+	}
+}
+
+func TestSetBaseURL_ManagedModeClearsTransportOnly(t *testing.T) {
+	// In managed mode SetBaseURL must NOT touch the spawned process or
+	// the bearer; only the cached transport is cleared. Construct a
+	// provider in attach mode then mutate the managed flag so we can
+	// exercise the branch without spawning a real bridge.
+	rs := newReplayServer(t, func(w http.ResponseWriter, path string, body []byte) {})
+	p := rs.provider(t)
+	p.managed = true
+	p.tr = &Transport{} // sentinel; will be cleared
+	p.curToken = "managed-bearer"
+	p.SetBaseURL("http://some-other:9999")
+	if p.tr != nil {
+		t.Errorf("cached transport not reset in managed mode")
+	}
+	if p.curToken != "managed-bearer" {
+		t.Errorf("managed token clobbered: %q", p.curToken)
+	}
+	if p.manager == nil {
+		t.Errorf("manager should remain set in managed mode")
+	}
+}
+
+func TestClose_NoManagerIsNoOp(t *testing.T) {
+	// A Provider with nil manager (e.g., after a failed constructor)
+	// must Close without panicking.
+	p := &Provider{}
+	if err := p.Close(); err != nil {
+		t.Errorf("Close with nil manager = %v, want nil", err)
+	}
+}
+
+func TestProviderTransportCacheHit(t *testing.T) {
+	// Second transport() call after a successful Start returns the
+	// cached transport without re-running the bridge handshake.
+	rs := newReplayServer(t, func(w http.ResponseWriter, path string, body []byte) {
+		if path == createAgentPath {
+			writeUnaryJSON(w, `{"agentId":"a"}`)
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	p := rs.provider(t)
+	tr1, err := p.transport(context.Background())
+	if err != nil {
+		t.Fatalf("first transport: %v", err)
+	}
+	tr2, err := p.transport(context.Background())
+	if err != nil {
+		t.Fatalf("second transport: %v", err)
+	}
+	if tr1 != tr2 {
+		t.Errorf("second transport did not return cached transport")
+	}
+}
+
+func TestWorkspaceOrDefault(t *testing.T) {
+	// Attached mode (no spawn) → no workspace from manager; falls
+	// through to os.TempDir() which on every supported platform is
+	// non-empty.
+	rs := newReplayServer(t, func(w http.ResponseWriter, path string, body []byte) {})
+	p := rs.provider(t)
+	got := p.workspaceOrDefault()
+	if got == "" || got == "/" {
+		t.Errorf("workspaceOrDefault = %q, want os.TempDir()", got)
+	}
+
+	// Inject a workspace into the existing manager; that value wins.
+	p.manager.workspaceDir = "/tmp/managed-ws"
+	got = p.workspaceOrDefault()
+	if got != "/tmp/managed-ws" {
+		t.Errorf("workspaceOrDefault with managed ws = %q, want /tmp/managed-ws", got)
+	}
+}
+
+func TestCloseAgent_LogsOnFailure(t *testing.T) {
+	// When the CloseAgent RPC fails, closeAgent must log a warning
+	// and return the error so the defer can swallow it.
+	rs := newReplayServer(t, func(w http.ResponseWriter, path string, body []byte) {
+		if path == closeAgentPath {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"code":"x","message":"y"}`))
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	p := rs.provider(t)
+	tr, err := p.transport(context.Background())
+	if err != nil {
+		t.Fatalf("transport: %v", err)
+	}
+	if err := p.closeAgent(context.Background(), tr, "agent-x"); err == nil {
+		t.Fatal("expected error from closeAgent on 500")
+	}
+}
+
+func TestNewWithHTTPClient_UsesDefaultBaseURL(t *testing.T) {
+	// NewWithHTTPClient substitutes DefaultBaseURL when given an empty
+	// endpoint — a documented fallback for tests that don't care about
+	// the loopback address.
+	p, err := NewWithHTTPClient("k", "", http.DefaultClient, llmclient.Hooks{})
+	if err != nil {
+		t.Fatalf("NewWithHTTPClient empty endpoint: %v", err)
+	}
+	if p == nil {
+		t.Fatal("provider is nil")
+	}
+	if p.curURL != DefaultBaseURL {
+		t.Errorf("curURL = %q, want DefaultBaseURL %q", p.curURL, DefaultBaseURL)
+	}
+}
+
+func TestNewProviderFactorySeesStartError(t *testing.T) {
+	// When the bridge binary is missing, New() must still return a
+	// non-nil provider with startErr set, and ChatCompletion must
+	// surface that error.
+	t.Setenv("CURSOR_SDK_BRIDGE_BIN", "/nope/cursor-sdk-bridge")
+	factory := providers.NewProviderFactory()
+	factory.Add(Registration)
+	p, err := factory.Create(providers.ProviderConfig{Type: "cursor", APIKey: "k"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if p == nil {
+		t.Fatal("Create returned nil provider")
+	}
+	_, err = p.ChatCompletion(context.Background(), &core.ChatRequest{
+		Model:    "composer-2.5",
+		Messages: []core.Message{{Role: "user", Content: "hi"}},
+	})
+	if err == nil {
+		t.Fatal("expected error from missing bridge")
+	}
+	var gw *core.GatewayError
+	if !errors.As(err, &gw) {
+		t.Fatalf("error type = %T, want *core.GatewayError", err)
+	}
+	if gw.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("StatusCode = %d, want 503", gw.StatusCode)
+	}
+}
+
+func TestFlattenHistoryMixedRoles(t *testing.T) {
+	// Non-system/user/assistant roles use the [UPPERCASE] form so the
+	// bridge can still disambiguate.
+	got := flattenHistory([]core.Message{
+		{Role: "tool", Content: "output"},
+		{Role: "USER", Content: "u"}, // case-insensitive
+	})
+	want := "[TOOL]\noutput\n\n[USER]\nu"
+	if got != want {
+		t.Errorf("flattenHistory mixed = %q, want %q", got, want)
+	}
+}
+
+func TestExtractAssistantTextEdgeCases(t *testing.T) {
+	var b strings.Builder
+	// Empty payload → no-op.
+	extractAssistantText(nil, &b)
+	if b.Len() != 0 {
+		t.Errorf("nil payload appended %q", b.String())
+	}
+	// Malformed JSON → silently skipped.
+	extractAssistantText([]byte("{not-json"), &b)
+	if b.Len() != 0 {
+		t.Errorf("malformed JSON appended %q", b.String())
+	}
+	// Non-text blocks → skipped.
+	extractAssistantText([]byte(`{"role":"assistant","content":[{"type":"image","text":"ignored"},{"type":"text","text":"hello"}]}`), &b)
+	if b.String() != "hello" {
+		t.Errorf("non-text block not filtered: %q", b.String())
+	}
+	// Empty content array → no-op.
+	b.Reset()
+	extractAssistantText([]byte(`{"role":"assistant","content":[]}`), &b)
+	if b.Len() != 0 {
+		t.Errorf("empty content produced output: %q", b.String())
+	}
+}
+
+func TestPickFinalTextPrecedence(t *testing.T) {
+	// Terminal text wins over streamed deltas.
+	if got := pickFinalText("stream", "term"); got != "term" {
+		t.Errorf("pickFinalText = %q, want term", got)
+	}
+	// Empty terminal falls back to streamed.
+	if got := pickFinalText("stream", ""); got != "stream" {
+		t.Errorf("pickFinalText fallback = %q, want stream", got)
+	}
+	// Both empty → empty.
+	if got := pickFinalText("", ""); got != "" {
+		t.Errorf("pickFinalText both empty = %q, want empty", got)
+	}
+}
+
+func TestCursorRunErrorVariants(t *testing.T) {
+	// Both errorCode and message set: combined.
+	err := cursorRunError(&runStreamResult{
+		Status:     "RUN_LIFECYCLE_STATUS_ERROR",
+		ErrorCode:  "model_overloaded",
+		Result:     runResult{Result: "boom"},
+	})
+	if !strings.Contains(err.Error(), "model_overloaded") ||
+		!strings.Contains(err.Error(), "boom") {
+		t.Errorf("error = %q, want both code and message", err.Error())
+	}
+
+	// errorCode only → fall back to code.
+	err = cursorRunError(&runStreamResult{
+		Status:    "RUN_LIFECYCLE_STATUS_ERROR",
+		ErrorCode: "rate_limited",
+	})
+	if !strings.Contains(err.Error(), "rate_limited") {
+		t.Errorf("error = %q, want code-only message", err.Error())
+	}
+
+	// message only → fall back to message.
+	err = cursorRunError(&runStreamResult{
+		Status: "RUN_LIFECYCLE_STATUS_ERROR",
+		Result: runResult{Result: "exploded"},
+	})
+	if !strings.Contains(err.Error(), "exploded") {
+		t.Errorf("error = %q, want message-only message", err.Error())
+	}
+
+	// Neither → generic "status ..." fallback.
+	err = cursorRunError(&runStreamResult{Status: "WAT"})
+	if !strings.Contains(err.Error(), "WAT") {
+		t.Errorf("error = %q, want generic fallback mentioning status", err.Error())
+	}
+}
+
 func TestListModels_Empty(t *testing.T) {
 	rs := newReplayServer(t, func(w http.ResponseWriter, path string, body []byte) {
 		writeUnaryJSON(w, `{}`)
