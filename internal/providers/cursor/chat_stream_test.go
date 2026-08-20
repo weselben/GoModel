@@ -782,3 +782,112 @@ func TestStreamConverter_InnerLoopEOFAfterSkipsReturnsDone(t *testing.T) {
 		t.Errorf("body = %q, want [DONE]", string(out[:n]))
 	}
 }
+
+// TestStreamConverter_InnerLoopResultFrameBufferReturn covers the
+// `case env.Result != nil` branch in the inner loop — a non-terminal
+// Result frame (e.g. one with empty Status or with a non-FINISHED
+// Status that handleResult reports) must surface the error rather
+// than silently swallow it.
+func TestStreamConverter_InnerLoopResultFrameBufferReturn(t *testing.T) {
+	var buf bytes.Buffer
+	frames := []string{
+		`{"sdkMessage":{"type":"unknown","message":{}}}`,                                  // skip in inner loop
+		`{"result":{"agentId":"a","runId":"r","status":"FAILED","result":"boom","errorCode":"model_overloaded"}}`, // Result with non-OK status
+	}
+	for _, m := range frames {
+		payload := []byte(m)
+		hdr := make([]byte, 5)
+		binary.BigEndian.PutUint32(hdr[1:5], uint32(len(payload)))
+		buf.Write(hdr)
+		buf.Write(payload)
+	}
+
+	sr := newStreamReader(io.NopCloser(&buf))
+	sc := &streamConverter{
+		stream:     sr,
+		model:      "m",
+		created:    time.Now().Unix(),
+		buffer:     streaming.NewStreamBuffer(1024),
+		closeAgent: func() {},
+		ctx:        context.Background(),
+	}
+	out := make([]byte, 1024)
+	_, err := sc.Read(out)
+	if err == nil {
+		t.Fatal("expected error from non-OK terminal status, got nil")
+	}
+	var gw *core.GatewayError
+	if !errors.As(err, &gw) {
+		t.Fatalf("error type = %T (%v), want *core.GatewayError", err, err)
+	}
+}
+
+// TestStreamConverter_InnerLoopAssistantReturnsBuffered covers the
+// `case env.SDKMessage != nil && env.SDKMessage.Type == "assistant"`
+// branch in the inner loop — after one unrecognized frame, an
+// assistant frame must surface its text content via the buffer.
+func TestStreamConverter_InnerLoopAssistantReturnsBuffered(t *testing.T) {
+	var buf bytes.Buffer
+	frames := []string{
+		`{"sdkMessage":{"type":"unknown","message":{}}}`, // first iter — skip
+		`{"sdkMessage":{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hello-from-inner"}]}}}`, // assistant — buffer.Append
+	}
+	for _, m := range frames {
+		payload := []byte(m)
+		hdr := make([]byte, 5)
+		binary.BigEndian.PutUint32(hdr[1:5], uint32(len(payload)))
+		buf.Write(hdr)
+		buf.Write(payload)
+	}
+
+	sr := newStreamReader(io.NopCloser(&buf))
+	sc := &streamConverter{
+		stream:     sr,
+		model:      "m",
+		created:    time.Now().Unix(),
+		buffer:     streaming.NewStreamBuffer(1024),
+		closeAgent: func() {},
+		ctx:        context.Background(),
+	}
+	out := make([]byte, 512)
+	n, err := sc.Read(out)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if !strings.Contains(string(out[:n]), "hello-from-inner") {
+		t.Errorf("body = %q, want assistant text", string(out[:n]))
+	}
+}
+
+// TestStreamConverter_InnerLoopEOFAfterSkipsReleasesAgent covers the
+// inner-loop EOF branch: releaseAgent must be called when EOF is hit
+// mid-loop, so the bridge agent is freed even when the loop exits
+// through EOF instead of through a Result frame.
+func TestStreamConverter_InnerLoopEOFAfterSkipsReleasesAgent(t *testing.T) {
+	var buf bytes.Buffer
+	for i := 0; i < 5; i++ {
+		payload := []byte(`{"sdkMessage":{"type":"unknown","message":{}}}`)
+		hdr := make([]byte, 5)
+		binary.BigEndian.PutUint32(hdr[1:5], uint32(len(payload)))
+		buf.Write(hdr)
+		buf.Write(payload)
+	}
+
+	sr := newStreamReader(io.NopCloser(&buf))
+	var released atomic.Int32
+	sc := &streamConverter{
+		stream:     sr,
+		model:      "m",
+		created:    time.Now().Unix(),
+		buffer:     streaming.NewStreamBuffer(1024),
+		closeAgent: func() { released.Add(1) },
+		ctx:        context.Background(),
+	}
+	out := make([]byte, 64)
+	if _, err := sc.Read(out); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if released.Load() != 1 {
+		t.Errorf("releaseAgent called %d times, want 1 (EOF path)", released.Load())
+	}
+}
