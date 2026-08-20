@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -330,13 +331,19 @@ type readyResult struct {
 	err      error
 }
 
-// resolveBridgeBinary implements the documented search order.
+// resolveBridgeBinary implements the documented search order. An existing
+// file is only considered a candidate when it is also executable on the
+// current platform — a non-executable CURSOR_SDK_BRIDGE_BIN would
+// otherwise pass the existence check and surface as a generic 502 from
+// exec.Start, instead of the 503 Service Unavailable the operator
+// actually wants.
 func resolveBridgeBinary() (string, error) {
 	if v := strings.TrimSpace(os.Getenv("CURSOR_SDK_BRIDGE_BIN")); v != "" {
-		if _, err := os.Stat(v); err == nil {
+		if ok, why := executableBinary(v); ok {
 			return v, nil
+		} else {
+			return "", fmt.Errorf("%w: CURSOR_SDK_BRIDGE_BIN=%q is not executable (%s)", ErrBridgeUnreachable, v, why)
 		}
-		return "", fmt.Errorf("%w: CURSOR_SDK_BRIDGE_BIN=%q does not exist", ErrBridgeUnreachable, v)
 	}
 	if path, err := execLookPath("cursor-sdk-bridge"); err == nil {
 		return path, nil
@@ -344,13 +351,44 @@ func resolveBridgeBinary() (string, error) {
 	home, err := homeDir()
 	if err == nil {
 		candidate := filepath.Join(home, ".local", "share", "gomodel", "bin", "cursor-sdk-bridge")
-		if _, statErr := os.Stat(candidate); statErr == nil {
+		if ok, why := executableBinary(candidate); ok {
 			return candidate, nil
+		} else if why != "missing" {
+			return "", fmt.Errorf("%w: %q is not executable (%s)", ErrBridgeUnreachable, candidate, why)
 		}
 	}
 	return "", fmt.Errorf("%w: cursor-sdk-bridge not found — set CURSOR_SDK_BRIDGE_BIN, "+
 		"add cursor-sdk-bridge to PATH, or install it under "+
 		"~/.local/share/gomodel/bin/cursor-sdk-bridge", ErrBridgeUnreachable)
+}
+
+// executableBinary reports whether path is an executable file. The
+// reason string is non-empty on failure, with the special value "missing"
+// reserved for "the file does not exist" so callers can choose to fall
+// through instead of erroring. On non-unix platforms the existing
+// presence check is sufficient; we never attempt to exec there.
+func executableBinary(path string) (bool, string) {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, "missing"
+		}
+		return false, err.Error()
+	}
+	if info.IsDir() {
+		return false, "is a directory"
+	}
+	if runtime.GOOS == "windows" {
+		// Windows relies on PATHEXT and CreateProcess's broader rules;
+		// the presence check is the best we can do without platform
+		// imports the user does not already have.
+		return true, ""
+	}
+	mode := info.Mode()
+	if mode&0o111 == 0 {
+		return false, "no execute permission bits set"
+	}
+	return true, ""
 }
 
 // scrubbedBridgeEnv returns the minimal env passed to the bridge child.
@@ -374,10 +412,11 @@ func scrubbedBridgeEnv(apiKey string) []string {
 	// Forward proxy-related env vars so the bridge can reach external
 	// APIs through a corporate proxy. Both upper- and lower-case forms
 	// because Go's net/http reads them case-insensitively at lookup,
-	// but the underlying HTTP client libraries vary.
+	// but the underlying HTTP client libraries vary. ALL_PROXY is the
+	// common "everything else" catch-all used by curl-derived tooling.
 	for _, key := range []string{
-		"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
-		"http_proxy", "https_proxy", "no_proxy",
+		"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY",
+		"http_proxy", "https_proxy", "no_proxy", "all_proxy",
 	} {
 		if v := os.Getenv(key); v != "" {
 			env = append(env, key+"="+v)

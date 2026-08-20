@@ -25,6 +25,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/goccy/go-json"
 
@@ -69,6 +70,9 @@ type Transport struct {
 // a warning so the operator sees the issue during boot, not deep
 // inside a request.
 func NewTransport(httpClient *http.Client, baseURL, token string) *Transport {
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
 	if strings.ContainsAny(token, "\r\n") {
 		slog.Warn("cursor: bearer token contained CR/LF; stripping before use — set CURSOR_BRIDGE_TOKEN to a clean value")
 		token = strings.NewReplacer("\r", "", "\n", "").Replace(token)
@@ -343,23 +347,44 @@ func parseEndStream(payload []byte) error {
 }
 
 // scrubForLog returns a printable preview of payload, capped at max bytes
-// and with non-printable bytes replaced so it is safe to drop into a log
-// line. Used for the parseEndStream warning where the raw bytes might
-// contain bearer tokens or binary garbage.
+// and with non-printable / control runes replaced so it is safe to drop
+// into a log line. Used for the parseEndStream warning where the raw
+// bytes might contain bearer tokens or binary garbage.
+//
+// Bytes that are not ASCII printable are emitted as `\xNN` escapes. UTF-8
+// runes outside printable ASCII (e.g. U+2028 line-separator, bidi
+// control runes) are emitted as `\uNNNN` escapes. This keeps secrets and
+// terminal-breaking glyphs out of the preview.
 func scrubForLog(payload []byte, max int) string {
 	if len(payload) > max {
 		payload = payload[:max]
 	}
 	var b strings.Builder
-	b.Grow(len(payload))
-	for _, c := range payload {
+	b.Grow(len(payload) * 4)
+	for i := 0; i < len(payload); {
+		c := payload[i]
 		switch {
 		case c == '\t' || c == '\n' || c == '\r':
 			b.WriteByte(' ')
+			i++
 		case c < 0x20 || c == 0x7f:
 			fmt.Fprintf(&b, "\\x%02x", c)
+			i++
+		case c >= 0x80:
+			// Decode the UTF-8 rune so a multi-byte sequence escapes as
+			// one \uNNNN — a per-byte escape would still be safe but
+			// noisier and harder to grep for.
+			r, size := utf8.DecodeRune(payload[i:])
+			if r == utf8.RuneError && size <= 1 {
+				fmt.Fprintf(&b, "\\x%02x", c)
+				i++
+			} else {
+				fmt.Fprintf(&b, "\\u%04x", r)
+				i += size
+			}
 		default:
 			b.WriteByte(c)
+			i++
 		}
 	}
 	return b.String()

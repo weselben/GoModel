@@ -585,6 +585,13 @@ func TestScrubForLog(t *testing.T) {
 	if got := scrubForLog(big, 5); got != "xxxxx" {
 		t.Errorf("scrubForLog(big,5) = %q, want xxxxx", got)
 	}
+	// High-bit / unicode rune → \uNNNN escape so the preview is safe
+	// for terminals and log aggregators that interpret U+2028/U+2029.
+	got = scrubForLog([]byte{0xE2, 0x80, 0xA8, 'x', 0xC2, 0xAD}, 64)
+	want = `\u2028x\u00ad`
+	if got != want {
+		t.Errorf("scrubForLog(unicode) = %q, want %q", got, want)
+	}
 }
 
 func TestUnsupportedErrorMessage(t *testing.T) {
@@ -659,8 +666,8 @@ func TestUnaryBodyDecodeFailureSurfacesGateway(t *testing.T) {
 		// Drain request so the test does not leak the connection.
 		_, _ = io.Copy(io.Discard, r.Body)
 		w.Header().Set("Content-Type", "application/json")
-		// Valid HTTP 200 with malformed JSON body — surface as
-		// decode failure rather than a zero-value response.
+		// Valid HTTP 200 with truncated JSON body — surface as a
+		// typed decode failure rather than a zero-value response.
 		_, _ = io.WriteString(w, `{"status":"OK"`)
 	})
 	srv := httptest.NewServer(mux)
@@ -669,10 +676,16 @@ func TestUnaryBodyDecodeFailureSurfacesGateway(t *testing.T) {
 	tr := NewTransport(srv.Client(), srv.URL, "tok")
 	var out map[string]any
 	err := tr.Unary(context.Background(), "svc", "Send", map[string]string{"k": "v"}, &out)
-	if err != nil {
-		return // decode failure as expected
+	if err == nil {
+		t.Fatal("expected decode failure on truncated JSON, got nil")
 	}
-	_ = out
+	var gw *core.GatewayError
+	if !errors.As(err, &gw) {
+		t.Fatalf("error type = %T (%v), want *core.GatewayError", err, err)
+	}
+	if gw.StatusCode != http.StatusBadGateway {
+		t.Errorf("StatusCode = %d, want 502", gw.StatusCode)
+	}
 }
 
 // TestReadFrameTruncatedPayload covers io.ReadFull returning
