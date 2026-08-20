@@ -1,0 +1,22 @@
+{
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+        "content": "hello world",
+        "role": "assistant"
+      }
+    }
+  ],
+  "created": 0,
+  "id": "run-1",
+  "model": "gpt-5",
+  "object": "chat.completion",
+  "provider": "",
+  "usage": {
+    "completion_tokens": 5,
+    "prompt_tokens": 10,
+    "total_tokens": 15
+  }
+}
