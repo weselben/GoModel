@@ -839,6 +839,77 @@ func TestResolveBridgeBinaryNonExecutableSurfacesErrUnreachable(t *testing.T) {
 	}
 }
 
+// TestSpawnZeroStartupTimeoutUsesDefault covers the
+// `if timeout <= 0` defensive branch — a BridgeManager with a 0
+// startupTimeout must fall through to defaultStartupTimeout instead
+// of constructing a zero-duration context.
+func TestSpawnZeroStartupTimeoutUsesDefault(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX signals not supported on windows")
+	}
+	withFakeBridge(t)
+
+	tokenFile := filepath.Join(t.TempDir(), "auth-token")
+	t.Setenv("FAKE_BRIDGE_TOKEN_FILE", tokenFile)
+	t.Setenv("FAKE_BRIDGE_TOKEN", "tok")
+
+	bm, err := NewManagedBridgeManager("test-api-key")
+	if err != nil {
+		t.Fatalf("NewManagedBridgeManager: %v", err)
+	}
+	bm.startupTimeout = 0 // exercise the <= 0 fallback
+	bm.cmd.Env = append(bm.cmd.Env,
+		"FAKE_BRIDGE_TOKEN_FILE="+tokenFile,
+		"FAKE_BRIDGE_TOKEN=tok",
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, _, err := bm.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	_ = bm.Close()
+}
+
+// TestSpawnCancelledContextSurfacesCtxErr covers the
+// `if ctxErr := ctx.Err(); ctxErr != nil` branch — when the parent
+// context is cancelled before the bridge becomes ready, the error
+// must wrap the cancellation rather than the generic timeout.
+func TestSpawnCancelledContextSurfacesCtxErr(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX signals not supported on windows")
+	}
+	withFakeBridge(t)
+
+	tokenFile := filepath.Join(t.TempDir(), "auth-token")
+	t.Setenv("FAKE_BRIDGE_TOKEN_FILE", tokenFile)
+	t.Setenv("FAKE_BRIDGE_TOKEN", "tok")
+	// hang mode keeps the bridge from ever emitting the ready line.
+	t.Setenv("FAKE_BRIDGE_MODE", "hang")
+
+	bm, err := NewManagedBridgeManager("test-api-key",
+		WithStartupTimeout(2*time.Second))
+	if err != nil {
+		t.Fatalf("NewManagedBridgeManager: %v", err)
+	}
+	bm.cmd.Env = append(bm.cmd.Env,
+		"FAKE_BRIDGE_TOKEN_FILE="+tokenFile,
+		"FAKE_BRIDGE_TOKEN=tok",
+		"FAKE_BRIDGE_MODE=hang",
+	)
+	bm.shutdownTimeout = 200 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel immediately so the parent ctx is done before Start.
+	cancel()
+	_, _, err = bm.Start(ctx)
+	if err == nil {
+		t.Fatal("expected error from cancelled context, got nil")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want wrapping context.Canceled", err)
+	}
+}
+
 // TestExecutableBinaryClassification drives the executableBinary table
 // directly — missing files, directories, non-executable regular files,
 // and executable regular files. The reason string is asserted so future
@@ -898,5 +969,118 @@ func TestResolveBridgeBinaryPathDirectoryNotFound(t *testing.T) {
 	_, err := resolveBridgeBinary()
 	if err == nil {
 		t.Fatal("expected error from absent binary, got none")
+	}
+}
+
+// TestResolveBridgeBinaryNonExecHomeCoversErrUnreachable covers the
+// `if why != "missing"` branch — when the home-directory fallback
+// finds a path that exists but is not executable, it must surface
+// ErrBridgeUnreachable rather than silently passing the path to
+// exec.Start which would fail later with a generic spawn error.
+func TestResolveBridgeBinaryNonExecHomeCoversErrUnreachable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("executable-bit check is unix-only")
+	}
+	tmp := t.TempDir()
+	binDir := tmp + "/.local/share/gomodel/bin"
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	binPath := binDir + "/cursor-sdk-bridge"
+	if err := os.WriteFile(binPath, []byte("#!/bin/sh\nexit 0\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	t.Setenv("CURSOR_SDK_BRIDGE_BIN", "")
+	t.Setenv("PATH", "/nonexistent-only")
+	t.Setenv("HOME", tmp)
+	_, err := resolveBridgeBinary()
+	if err == nil {
+		t.Fatal("expected error from non-executable home-dir binary, got nil")
+	}
+	if !errors.Is(err, ErrBridgeUnreachable) {
+		t.Errorf("err = %v, want wrapping ErrBridgeUnreachable", err)
+	}
+}
+
+// TestSpawnNonExecutableSurfacesErrUnreachable exercises the
+// `b.cmd.Start()` failure path — when exec.Start fails because the
+// resolved binary is not executable, the error must wrap
+// ErrBridgeUnreachable so startFailure returns 503 instead of 502.
+func TestSpawnNonExecutableSurfacesErrUnreachable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("executable-bit check is unix-only")
+	}
+	withFakeBridge(t)
+
+	path := filepath.Join(t.TempDir(), "fake")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	bm, err := NewManagedBridgeManager("test-api-key")
+	if err != nil {
+		t.Fatalf("NewManagedBridgeManager: %v", err)
+	}
+	// Force the manager to point at our non-executable fake.
+	bm.cmd = exec.Command(path, "--workspace", "{workspace}")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, _, err = bm.Start(ctx)
+	if err == nil {
+		t.Fatal("expected error from non-executable binary, got nil")
+	}
+}
+
+// TestCloseEscalatesToSIGKILLWhenBridgeIgnoresSIGTERM covers the
+// SIGKILL escalation path in shutdown(). When SIGTERM does not bring
+// the bridge down within shutdownTimeout, the manager must escalate
+// to SIGKILL and return within bounded time.
+func TestCloseEscalatesToSIGKILLWhenBridgeIgnoresSIGTERM(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX signals not supported on windows")
+	}
+	withFakeBridge(t)
+
+	tokenFile := filepath.Join(t.TempDir(), "auth-token")
+	t.Setenv("FAKE_BRIDGE_TOKEN_FILE", tokenFile)
+	t.Setenv("FAKE_BRIDGE_TOKEN", "kill-test-token")
+	t.Setenv("FAKE_BRIDGE_MODE", "sigterm_ignore")
+
+	bm, err := NewManagedBridgeManager("test-api-key",
+		WithShutdownTimeout(150*time.Millisecond))
+	if err != nil {
+		t.Fatalf("NewManagedBridgeManager: %v", err)
+	}
+	bm.cmd.Env = append(bm.cmd.Env,
+		"FAKE_BRIDGE_TOKEN_FILE="+tokenFile,
+		"FAKE_BRIDGE_TOKEN=kill-test-token",
+		"FAKE_BRIDGE_MODE=sigterm_ignore",
+	)
+	bm.startupTimeout = 5 * time.Second
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, _, err = bm.Start(ctx)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	pid := bm.cmd.Process.Pid
+	done := make(chan error, 1)
+	start := time.Now()
+	go func() { done <- bm.Close() }()
+	select {
+	case err := <-done:
+		elapsed := time.Since(start)
+		if err != nil {
+			t.Errorf("Close: %v", err)
+		}
+		// SIGKILL escalation should fire well within 2s.
+		if elapsed > 2*time.Second {
+			t.Errorf("Close took %v; expected fast SIGKILL escalation", elapsed)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not return; bridge likely still alive")
+	}
+	if _, ok := childPIDs(os.Getpid())[pid]; ok {
+		t.Errorf("child pid %d still alive after SIGKILL escalation", pid)
 	}
 }

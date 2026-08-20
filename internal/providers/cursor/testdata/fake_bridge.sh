@@ -49,6 +49,27 @@ EOF
         # outlive a killed bridge. Tests assert no leaked processes.
         exec sleep 3600
         ;;
+    sigterm_ignore)
+        # Same as ready but traps and ignores SIGTERM. Used to test
+        # the bridge manager's SIGKILL escalation when SIGTERM does
+        # not bring the bridge down within shutdownTimeout.
+        token_file=${FAKE_BRIDGE_TOKEN_FILE:-}
+        token=${FAKE_BRIDGE_TOKEN:-secret-test-token}
+        if [ -z "$token_file" ]; then
+            echo "fake bridge: FAKE_BRIDGE_TOKEN_FILE not set" >&2
+            exit 2
+        fi
+        printf '%s\n' "$token" >"$token_file"
+        chmod 0600 "$token_file"
+        cat >&2 <<EOF
+cursor-sdk-bridge ready {"schemaVersion":1,"serverVersion":"fake-1.0.0","pid":${$:-0},"transport":"tcp","protocol":"connect","host":"127.0.0.1","port":49152,"url":"http://127.0.0.1:49152","authTokenFile":"$token_file","workspaceRef":"$workspace","stateRoot":"/tmp/fake-state"}
+EOF
+        # Ignore SIGTERM (signal 15) so the parent must escalate to
+        # SIGKILL after shutdownTimeout expires.
+        trap '' TERM
+        # Use sleep 3600 with explicit PATH for portability.
+        PATH=/usr/bin:/bin sleep 3600
+        ;;
     *)
         echo "fake bridge: unknown mode $mode" >&2
         exit 2
