@@ -796,3 +796,37 @@ func TestParseReadyLineMalformedJSON(t *testing.T) {
 		t.Errorf("error = %q, want 'parse ready line' prefix", err.Error())
 	}
 }
+
+// TestResolveBridgeBinaryMissingPathCoversUnreachable exercises the
+// `if v := strings.TrimSpace(...); v != ""` and `if _, err := os.Stat(v); err == nil`
+// branches — set CURSOR_SDK_BRIDGE_BIN to a path that does not exist
+// and confirm resolveBridgeBinary returns the ErrBridgeUnreachable sentinel.
+func TestResolveBridgeBinaryMissingPathCoversUnreachable(t *testing.T) {
+	t.Setenv("CURSOR_SDK_BRIDGE_BIN", "/tmp/this/path/definitely/does/not/exist")
+	_, err := resolveBridgeBinary()
+	if err == nil {
+		t.Fatal("expected error from missing binary path, got none")
+	}
+	if !errors.Is(err, ErrBridgeUnreachable) {
+		t.Errorf("err = %v, want wrapping ErrBridgeUnreachable", err)
+	}
+}
+
+// TestResolveBridgeBinaryPathDirectoryNotFound covers the
+// `if _, statErr := os.Stat(candidate); statErr == nil` path when
+// neither CURSOR_SDK_BRIDGE_BIN nor cursor-sdk-bridge-in-PATH nor
+// ~/.local/share/... exists — last-resort branch that also wraps
+// ErrBridgeUnreachable.
+func TestResolveBridgeBinaryPathDirectoryNotFound(t *testing.T) {
+	t.Setenv("CURSOR_SDK_BRIDGE_BIN", "")
+	// Force exec.LookPath to fail by clearing PATH — this exercises
+	// the second branch of resolveBridgeBinary. Force homeDir() to
+	// return an empty directory so the .local/share fallback cannot
+	// find anything.
+	t.Setenv("PATH", "/nonexistent-only")
+	t.Setenv("HOME", t.TempDir())
+	_, err := resolveBridgeBinary()
+	if err == nil {
+		t.Fatal("expected error from absent binary, got none")
+	}
+}
