@@ -110,8 +110,53 @@ func (c *streamConverter) Read(p []byte) (int, error) {
 	if c.buffer.Len() > 0 {
 		return c.buffer.Read(p), nil
 	}
-	// No bytes produced for this frame — recurse to read the next one.
-	return c.Read(p)
+	// No bytes produced for this frame — read the next frame in place
+	// (bounded so a bridge that streams endless no-op frames cannot
+	// grow the stack or pin a goroutine).
+	const maxEmptyFramesPerRead = 64
+	for skipped := 0; skipped < maxEmptyFramesPerRead; skipped++ {
+		if c.closed {
+			return 0, io.EOF
+		}
+		frame, err := c.stream.Next(c.ctx)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				c.releaseAgent()
+				c.closed = true
+				c.buffer.AppendString("data: [DONE]\n\n")
+				return c.buffer.Read(p), nil
+			}
+			c.releaseAgent()
+			c.closed = true
+			c.buffer.Release()
+			return 0, err
+		}
+		env := runStreamEnvelope{}
+		if err := json.Unmarshal(frame, &env); err != nil {
+			c.releaseAgent()
+			c.closed = true
+			return 0, core.NewProviderError("cursor", http.StatusBadGateway,
+				"cursor: decode stream frame: "+err.Error(), err)
+		}
+		switch {
+		case env.Result != nil:
+			if err := c.handleResult(env.Result); err != nil {
+				c.releaseAgent()
+				c.closed = true
+				c.buffer.Release()
+				return 0, err
+			}
+		case env.SDKMessage != nil && env.SDKMessage.Type == "assistant":
+			c.appendAssistant(env.SDKMessage.Message)
+		}
+		if c.buffer.Len() > 0 {
+			return c.buffer.Read(p), nil
+		}
+	}
+	c.releaseAgent()
+	c.closed = true
+	return 0, core.NewProviderError("cursor", http.StatusBadGateway,
+		"cursor: bridge streamed too many empty frames without a terminal result", nil)
 }
 
 // handleResult renders the terminal result frame: emit a final chunk

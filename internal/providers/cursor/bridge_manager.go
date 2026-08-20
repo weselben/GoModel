@@ -384,7 +384,7 @@ func scanReadyLine(r io.Reader, out chan<- readyResult) {
 	var leftover strings.Builder
 	for {
 		line, err := br.ReadString('\n')
-		line = strings.TrimRight(line, "\n")
+		line = strings.TrimRight(line, "\r\n")
 		if payload, ok := strings.CutPrefix(line, readyLinePrefix); ok {
 			endpt, tok, parseErr := parseReadyLine(payload)
 			out <- readyResult{endpoint: endpt, token: tok, follow: br, err: parseErr}
