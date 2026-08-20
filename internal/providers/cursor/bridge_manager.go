@@ -182,7 +182,10 @@ func (b *BridgeManager) Start(ctx context.Context) (string, string, error) {
 	}
 	if b.endpoint != "" {
 		b.endpt = b.endpoint
-		b.tok = os.Getenv(b.tokenEnv)
+		// Trim whitespace: editors commonly inject leading/trailing
+		// spaces when authoring .env files, and the bearer ends up
+		// rejected with no useful clue. Use strings.TrimSpace.
+		b.tok = strings.TrimSpace(os.Getenv(b.tokenEnv))
 		b.started = true
 		return b.endpt, b.tok, nil
 	}
@@ -354,10 +357,28 @@ func resolveBridgeBinary() (string, error) {
 // The gateway process holds every provider API key and the master key,
 // so none of that may cross the bridge boundary. Mirror
 // internal/mcpgateway/upstream.go:180-196.
+//
+// In addition to PATH/HOME/TMPDIR/USER/LANG (the minimum to make the
+// bridge's own DNS / TLS init work), forward HTTP_PROXY/HTTPS_PROXY/
+// NO_PROXY (and lowercase variants) so operators behind a corporate
+// proxy can still reach the Cursor APIs. The bridge speaks HTTPS out
+// to Cursor, so omitting these causes silent connectivity failures.
 func scrubbedBridgeEnv(apiKey string) []string {
 	env := []string{}
 	keep := []string{"PATH", "HOME", "TMPDIR", "USER", "LANG"}
 	for _, key := range keep {
+		if v := os.Getenv(key); v != "" {
+			env = append(env, key+"="+v)
+		}
+	}
+	// Forward proxy-related env vars so the bridge can reach external
+	// APIs through a corporate proxy. Both upper- and lower-case forms
+	// because Go's net/http reads them case-insensitively at lookup,
+	// but the underlying HTTP client libraries vary.
+	for _, key := range []string{
+		"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+		"http_proxy", "https_proxy", "no_proxy",
+	} {
 		if v := os.Getenv(key); v != "" {
 			env = append(env, key+"="+v)
 		}
@@ -387,8 +408,13 @@ func replaceWorkspaceArg(args []string, dir string) []string {
 // prefix or the child closes the pipe. Exactly one result is delivered.
 // The follow reader is the same bufio.Reader used for scanning, so bytes
 // already buffered past the ready line are handed to the drain intact.
+//
+// The reader buffer is sized at 1 MiB: some supervisor wrappers print a
+// multi-line banner before the ready line and a 64 KiB scan buffer
+// (bufio.ErrBufferFull path) used to surface as a misleading
+// "bridge crashed" error on otherwise-healthy startups.
 func scanReadyLine(r io.Reader, out chan<- readyResult) {
-	br := bufio.NewReaderSize(r, 64*1024)
+	br := bufio.NewReaderSize(r, 1<<20)
 	var leftover strings.Builder
 	for {
 		line, err := br.ReadString('\n')
