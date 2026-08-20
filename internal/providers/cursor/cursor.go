@@ -328,10 +328,41 @@ func (p *Provider) runSend(ctx context.Context, tr *Transport, agentID string, r
 	return resp, nil
 }
 
-// TODO(Task 4): StreamChatCompletion is a stub until the envelope→SSE
-// converter lands in Task 4. Until then clients must use ChatCompletion.
-func (p *Provider) StreamChatCompletion(_ context.Context, _ *core.ChatRequest) (io.ReadCloser, error) {
-	return nil, unsupported("chat completions")
+// StreamChatCompletion runs a single streaming turn:
+//
+//  1. Lazy-start the bridge.
+//  2. CreateAgent with the requested model and the connection's API key.
+//  3. Send a UserMessage carrying the flattened conversation history.
+//  4. Wrap the resulting Connect frame stream in a streamConverter that
+//     renders each frame as OpenAI chat.completion.chunk SSE, releasing
+//     the agent on terminal frame, error, or explicit Close.
+func (p *Provider) StreamChatCompletion(ctx context.Context, req *core.ChatRequest) (io.ReadCloser, error) {
+	if req == nil {
+		return nil, core.NewInvalidRequestError("cursor: chat request is required", nil)
+	}
+	tr, err := p.transport(ctx)
+	if err != nil {
+		return nil, p.startFailure(err)
+	}
+	agentID, err := p.createAgent(ctx, tr, req.Model)
+	if err != nil {
+		return nil, err
+	}
+	body := sendRequest{
+		AgentID: agentID,
+		Message: userMessage{Text: flattenHistory(req.Messages)},
+	}
+	stream, err := tr.Stream(ctx, svcAgent, methodSend, &body)
+	if err != nil {
+		// Best-effort release: the caller never received a body, so any
+		// leaked agent would persist until the bridge shuts down.
+		_ = p.closeAgent(context.Background(), tr, agentID)
+		return nil, err
+	}
+	agentCloser := func() {
+		_ = p.closeAgent(context.Background(), tr, agentID)
+	}
+	return newStreamConverter(ctx, stream, req.Model, agentCloser), nil
 }
 
 // ListModels calls SdkCursorService.ListModels with a per-call api_key.
