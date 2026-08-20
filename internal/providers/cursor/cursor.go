@@ -458,11 +458,26 @@ func (p *Provider) workspaceOrDefault() string {
 }
 
 // startFailure turns a bridge-start failure into a provider error so the
-// status code surfaces consistently. EOF-heavy environments (the bridge
-// binary missing) land here on the first RPC.
+// status code surfaces consistently. Two failure shapes map to two status
+// codes:
+//
+//   - 503 Service Unavailable: the bridge binary is missing or otherwise
+//     unreachable (resolveBridgeBinary / exec.LookPath failure). The
+//     operator must install or point at the binary; the gateway did its
+//     part.
+//   - 502 Bad Gateway: the bridge was reachable (process spawned, stderr
+//     pipe open, ready-line expected) but returned a malformed handshake,
+//     crashed before the ready line, or timed out waiting for it. The
+//     bridge exists; the wire is bad.
 func (p *Provider) startFailure(err error) error {
-	return core.NewProviderError("cursor", http.StatusBadGateway,
-		"cursor: bridge unavailable: "+err.Error(), err)
+	switch {
+	case errors.Is(err, ErrBridgeUnreachable):
+		return core.NewProviderError("cursor", http.StatusServiceUnavailable,
+			"cursor: bridge unreachable: "+err.Error(), err)
+	default:
+		return core.NewProviderError("cursor", http.StatusBadGateway,
+			"cursor: bridge unavailable: "+err.Error(), err)
+	}
 }
 
 // unsupportedOperationCode mirrors the chatgpt provider's choice so the
