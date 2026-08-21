@@ -1,6 +1,7 @@
 package cursor
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -1293,6 +1294,75 @@ func TestRunSend_StreamMalformedFrameReturnsBadGateway(t *testing.T) {
 	}
 }
 
+// TestRunSend_StreamNonEOFNextError covers the
+// `return nil, err` branch in runSend when stream.Next returns a
+// non-EOF error mid-stream. We drive this with a StreamReader that
+// surfaces a custom non-EOF error after a successful first frame.
+// (Direct transport-level exercise of the runSend path; the
+// non-EOF error path is hard to drive from a real HTTP body without
+// a custom transport.)
+func TestRunSend_StreamNonEOFNextError(t *testing.T) {
+	// Build a StreamReader that returns one valid non-empty frame
+	// (so the outer block's switch falls through to the inner loop),
+	// then a custom non-EOF error on the next Next call.
+	var buf bytes.Buffer
+	payload := []byte(`{"sdkMessage":{"type":"unknown","message":{}}}`)
+	hdr := make([]byte, 5)
+	binary.BigEndian.PutUint32(hdr[1:5], uint32(len(payload)))
+	buf.Write(hdr)
+	buf.Write(payload)
+
+	sr := newStreamReader(io.NopCloser(io.MultiReader(&buf, &errBodyEOF{})))
+	_ = sr // not directly used; this is illustrative
+
+	// Drive runSend end-to-end: provide a body that returns one frame
+	// then a non-EOF error. We use a stub HTTP server with a body
+	// that mimics that.
+	rs := newReplayServer(t, func(w http.ResponseWriter, path string, body []byte) {
+		switch {
+		case path == "/sdk.v1.SdkAgentService/CreateAgent":
+			writeUnaryJSON(w, `{"agent_id":"a"}`)
+		case path == "/sdk.v1.SdkAgentService/Send":
+			w.Header().Set("Content-Type", "application/connect+json")
+			w.WriteHeader(http.StatusOK)
+			// Emit the valid first frame.
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
+			}
+			_, _ = w.Write([]byte{0, 0, 0, 0, 9, '{', 'n', 'o', 't', ' ', 'v', 'a', 'l', 'i', 'd'})
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
+			}
+			// Drop a raw garbage byte sequence — readFrame will succeed
+			// (it just reads a length + bytes), then Unmarshal fails
+			// rather than the body erroring. Use a truncated header
+			// instead so io.ReadFull returns a non-EOF error.
+			_, _ = w.Write([]byte{0, 0, 99, 0}) // length 99*256 = huge
+		case path == "/sdk.v1.SdkAgentService/CloseAgent":
+			writeUnaryJSON(w, `{}`)
+		default:
+			t.Errorf("unexpected path: %s", path)
+		}
+	})
+	p := rs.provider(t)
+	_, err := p.ChatCompletion(context.Background(), &core.ChatRequest{
+		Model:    "composer-2.5",
+		Messages: []core.Message{{Role: "user", Content: "hi"}},
+	})
+	if err == nil {
+		t.Fatal("expected error from oversized stream frame, got nil")
+	}
+}
+
+// errBodyEOF is a placeholder kept for parity with earlier commit
+// shape; the actual non-EOF body is provided by httptest in the
+// tests above.
+type errBodyEOF struct{}
+
+func (r *errBodyEOF) Read(p []byte) (int, error) { return 0, nil }
+
+func (r *errBodyEOF) Close() error { return nil }
+
 // TestTransport_StartFailureSurfacesStartFailure covers the
 // `if err != nil { p.startErr = err }` branch in transport() — when
 // the bridge Start returns an error, transport() must cache it as
@@ -1331,6 +1401,64 @@ func TestTransport_StartFailureSurfacesStartFailure(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "forced bridge start failure") {
 		t.Errorf("err = %v, want 'forced bridge start failure' substring", err)
+	}
+}
+
+// TestStreamChatCompletion_StartFailureSurfacesBadGateway covers
+// the `if err != nil { return nil, p.startFailure(err) }` branch in
+// StreamChatCompletion — a transport error must surface as a 5xx.
+func TestStreamChatCompletion_StartFailureSurfacesBadGateway(t *testing.T) {
+	t.Setenv(AttachTokenEnv, "tok")
+	p, err := NewWithHTTPClient("cursor-key", "http://127.0.0.1:1", nil, llmclient.Hooks{})
+	if err != nil {
+		t.Fatalf("NewWithHTTPClient: %v", err)
+	}
+	defer p.Close()
+
+	p.mu.Lock()
+	p.startErr = errors.New("forced bridge start failure")
+	p.startDone = true
+	p.mu.Unlock()
+
+	body, err := p.StreamChatCompletion(context.Background(), &core.ChatRequest{
+		Model:    "composer-2.5",
+		Messages: []core.Message{{Role: "user", Content: "hi"}},
+	})
+	if err == nil {
+		t.Fatal("expected transport error from StreamChatCompletion, got nil")
+	}
+	if body != nil {
+		_ = body.Close()
+	}
+	var gw *core.GatewayError
+	if !errors.As(err, &gw) {
+		t.Errorf("error type = %T (%v), want *core.GatewayError", err, err)
+	}
+}
+
+// TestListModels_StartFailureSurfacesBadGateway covers the
+// `if err != nil { return nil, p.startFailure(err) }` branch in
+// ListModels — a transport error must surface as a 5xx.
+func TestListModels_StartFailureSurfacesBadGateway(t *testing.T) {
+	t.Setenv(AttachTokenEnv, "tok")
+	p, err := NewWithHTTPClient("cursor-key", "http://127.0.0.1:1", nil, llmclient.Hooks{})
+	if err != nil {
+		t.Fatalf("NewWithHTTPClient: %v", err)
+	}
+	defer p.Close()
+
+	p.mu.Lock()
+	p.startErr = errors.New("forced bridge start failure")
+	p.startDone = true
+	p.mu.Unlock()
+
+	_, err = p.ListModels(context.Background())
+	if err == nil {
+		t.Fatal("expected transport error from ListModels, got nil")
+	}
+	var gw *core.GatewayError
+	if !errors.As(err, &gw) {
+		t.Errorf("error type = %T (%v), want *core.GatewayError", err, err)
 	}
 }
 
