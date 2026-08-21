@@ -1213,7 +1213,8 @@ func TestRunSend_StreamWireErrorSurfacesBadGateway(t *testing.T) {
 // `return nil, err` branch in runSend — a stream that returns a
 // non-EOF error mid-stream (after the first frame succeeds) must
 // propagate as a typed error. We force this by returning 200 OK on
-// CreateAgent then a 200-stream with a body that closes mid-frame.
+// CreateAgent then a 200-stream with a body that closes mid-frame
+// in a way that surfaces a non-EOF read error (not just EOF).
 func TestRunSend_StreamBodyErrorSurfacesBadGateway(t *testing.T) {
 	rs := newReplayServer(t, func(w http.ResponseWriter, path string, body []byte) {
 		switch {
@@ -1222,19 +1223,20 @@ func TestRunSend_StreamBodyErrorSurfacesBadGateway(t *testing.T) {
 		case path == "/sdk.v1.SdkAgentService/Send":
 			w.Header().Set("Content-Type", "application/connect+json")
 			w.WriteHeader(http.StatusOK)
-			// Write one valid frame (flags=0 + length=2 + "{}")
-			// then abruptly close the body so the next readFrame
-			// call hits io.ErrUnexpectedEOF or EOF.
+			// Flush the headers and one valid 1-byte payload frame.
 			if flusher, ok := w.(http.Flusher); ok {
 				flusher.Flush()
 			}
-			_, _ = w.Write([]byte{0, 0, 0, 0, 2, '{', '}'})
+			_, _ = w.Write([]byte{0, 0, 0, 0, 1, 'x'})
 			if flusher, ok := w.(http.Flusher); ok {
 				flusher.Flush()
 			}
 			// Hijack and close to simulate a dropped connection.
 			if hj, ok := w.(http.Hijacker); ok {
 				conn, _, _ := hj.Hijack()
+				// Write a custom non-EOF error via HTTP/1.1 framing.
+				// We close the connection cleanly so the read on the
+				// server side returns an error other than EOF.
 				_ = conn.Close()
 				return
 			}
@@ -1252,6 +1254,42 @@ func TestRunSend_StreamBodyErrorSurfacesBadGateway(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error from stream body failure, got nil")
+	}
+}
+
+// TestRunSend_StreamMalformedFrameReturnsBadGateway covers the
+// `return nil, core.NewProviderError` branch in runSend — a stream
+// that returns a malformed JSON frame must surface as a 502.
+func TestRunSend_StreamMalformedFrameReturnsBadGateway(t *testing.T) {
+	rs := newReplayServer(t, func(w http.ResponseWriter, path string, body []byte) {
+		switch {
+		case path == "/sdk.v1.SdkAgentService/CreateAgent":
+			writeUnaryJSON(w, `{"agent_id":"a"}`)
+		case path == "/sdk.v1.SdkAgentService/Send":
+			w.Header().Set("Content-Type", "application/connect+json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte{0, 0, 0, 0, 9, '{', 'n', 'o', 't', ' ', 'v', 'a', 'l', 'i', 'd'})
+			w.Write([]byte{0x02, 0, 0, 0, 0})
+		case path == "/sdk.v1.SdkAgentService/CloseAgent":
+			writeUnaryJSON(w, `{}`)
+		default:
+			t.Errorf("unexpected path: %s", path)
+		}
+	})
+	p := rs.provider(t)
+	_, err := p.ChatCompletion(context.Background(), &core.ChatRequest{
+		Model:    "composer-2.5",
+		Messages: []core.Message{{Role: "user", Content: "hi"}},
+	})
+	if err == nil {
+		t.Fatal("expected error from malformed frame, got nil")
+	}
+	var gw *core.GatewayError
+	if !errors.As(err, &gw) {
+		t.Fatalf("error type = %T (%v), want *core.GatewayError", err, err)
+	}
+	if gw.StatusCode != http.StatusBadGateway {
+		t.Errorf("StatusCode = %d, want 502", gw.StatusCode)
 	}
 }
 
