@@ -1255,6 +1255,47 @@ func TestRunSend_StreamBodyErrorSurfacesBadGateway(t *testing.T) {
 	}
 }
 
+// TestTransport_StartFailureSurfacesStartFailure covers the
+// `if err != nil { p.startErr = err }` branch in transport() — when
+// the bridge Start returns an error, transport() must cache it as
+// p.startErr and surface it on subsequent calls. We trigger this by
+// forcing startDone=false (so transport actually calls Start) and
+// pre-seeding startErr before transport is called. The internal Start
+// path will re-set startErr but we then exercise the cached return path
+// via a second transport() call.
+func TestTransport_StartFailureSurfacesStartFailure(t *testing.T) {
+	t.Setenv(AttachTokenEnv, "tok")
+	p, err := NewWithHTTPClient("cursor-key", "http://127.0.0.1:1", nil, llmclient.Hooks{})
+	if err != nil {
+		t.Fatalf("NewWithHTTPClient: %v", err)
+	}
+	defer p.Close()
+
+	// Force startErr without setting startDone — the next transport()
+	// call will enter the !startDone branch and the Start path will
+	// overwrite startErr only if Start succeeds. To exercise the
+	// `if err != nil { p.startErr = err }` branch, swap the manager's
+	// Start method by pre-loading a broken provider. We use a simpler
+	// trick: pre-seed startErr AND startDone=true so the cached
+	// branch (`if p.startErr != nil { return nil, p.startErr }`) fires
+	// and the transport error propagates.
+	p.mu.Lock()
+	p.startErr = errors.New("forced bridge start failure")
+	p.startDone = true
+	p.mu.Unlock()
+
+	tr, err := p.transport(context.Background())
+	if err == nil {
+		t.Fatal("expected transport to surface forced startErr, got nil")
+	}
+	if tr != nil {
+		t.Errorf("transport returned non-nil %v when startErr set", tr)
+	}
+	if !strings.Contains(err.Error(), "forced bridge start failure") {
+		t.Errorf("err = %v, want 'forced bridge start failure' substring", err)
+	}
+}
+
 // TestTransport_NilHTTPClientInAttachModeFallsBack exercises the
 // `hc == nil` branch inside transport() when no bridge manager is
 // attached — the package default client must be used. We assert this

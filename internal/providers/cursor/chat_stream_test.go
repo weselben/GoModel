@@ -709,8 +709,13 @@ func TestStreamConverter_InnerLoopAssistantFrameReturnsImmediateBuffer(t *testin
 func TestStreamConverter_InnerLoopMalformedFrameSurfaces502(t *testing.T) {
 	var buf bytes.Buffer
 	frames := []string{
-		`{}`,                                  // empty envelope; skipped by StreamReader
-		`{not valid`,                           // malformed
+		// First frame is a recognized-but-no-match sdkMessage so the
+		// outer block's switch does not fire — buffer stays empty and
+		// we fall into the inner loop.
+		`{"sdkMessage":{"type":"unknown","message":{}}}`,
+		// Second frame is malformed JSON. The inner loop's Unmarshal
+		// fails and surfaces a 502.
+		`{not valid`,
 	}
 	for _, m := range frames {
 		payload := []byte(m)
