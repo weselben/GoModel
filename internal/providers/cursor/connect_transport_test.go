@@ -137,6 +137,20 @@ func TestStream_Non2xxStatus(t *testing.T) {
 	}
 }
 
+// TestStream_MarshalFailure covers the marshalStreamRequest failure
+// path at the top of Stream — a non-marshalable payload (channel)
+// must surface as a typed InvalidRequestError, never reach the wire.
+func TestStream_MarshalFailure(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("server should not be called when marshal fails")
+	})
+	tr, _ := newTestTransport(t, handler)
+	_, err := tr.Stream(context.Background(), "svc", "Stream", make(chan int))
+	if err == nil {
+		t.Fatal("expected marshal failure, got nil")
+	}
+}
+
 // TestParseReadyLineAuthTokenFileReadError covers the
 // `os.ReadFile(r.AuthTokenFile)` failure path — when the bridge
 // points at an auth token file that does not exist or is unreadable,
@@ -148,6 +162,53 @@ func TestParseReadyLineAuthTokenFileReadError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "auth token file") {
 		t.Errorf("error = %q, want 'auth token file' substring", err.Error())
+	}
+}
+
+// TestParseReadyLineMissingBearerToken covers the
+// `if tok == ""` branch — a ready line that supplies neither
+// authToken nor authTokenFile must surface a wrapped error.
+func TestParseReadyLineMissingBearerToken(t *testing.T) {
+	_, _, err := parseReadyLine(`{"schemaVersion":1,"transport":"tcp","protocol":"connect","url":"http://h:1"}`)
+	if err == nil {
+		t.Fatal("expected error from missing bearer token, got none")
+	}
+	if !strings.Contains(err.Error(), "bearer token") {
+		t.Errorf("error = %q, want 'bearer token' substring", err.Error())
+	}
+}
+
+// TestStreamReaderNextPropagatesCtxOnNonEOFReadError covers the
+// `if ctxErr := ctx.Err(); ctxErr != nil` branch in StreamReader.Next
+// — when readFrame returns a non-EOF error and the caller's ctx is
+// cancelled, the cancellation error wins. We use a body that returns
+// a custom non-EOF error after the header bytes.
+type customErrReader struct{ header []byte }
+
+var customErr = errors.New("custom body read failure")
+
+func (r *customErrReader) Read(p []byte) (int, error) {
+	if len(r.header) > 0 {
+		n := copy(p, r.header)
+		r.header = r.header[n:]
+		return n, nil
+	}
+	return 0, customErr
+}
+
+func (r *customErrReader) Close() error { return nil }
+
+func TestStreamReaderNextPropagatesCtxOnNonEOFReadError(t *testing.T) {
+	// Header says the payload is 99 bytes; body returns a non-EOF
+	// error from the second Read. With ctx already cancelled, Next
+	// must surface ctx.Err(), not the raw body error.
+	body := &customErrReader{header: []byte{0, 0, 0, 0, 99}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	sr := newStreamReader(body)
+	_, err := sr.Next(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", err)
 	}
 }
 

@@ -790,6 +790,29 @@ func TestScanReadyLineTruncatedFrame(t *testing.T) {
 	}
 }
 
+// TestScanReadyLineNonEOFError covers the `else` branch in
+// scanReadyLine — when readFrame returns a non-EOF error, the
+// residual stderr and the error are delivered on the channel.
+func TestScanReadyLineNonEOFError(t *testing.T) {
+	pr, pw := io.Pipe()
+	go func() {
+		// Valid header that declares a 50-byte payload, then close
+		// the pipe with a custom non-EOF error so readFrame returns
+		// it directly.
+		_, _ = pw.Write([]byte{0, 0, 0, 0, 50})
+		_ = pw.CloseWithError(errors.New("body closed with custom error"))
+	}()
+	out := make(chan readyResult, 1)
+	scanReadyLine(pr, out)
+	res := <-out
+	if res.err == nil {
+		t.Fatal("expected error from non-EOF body, got nil")
+	}
+	if res.endpoint != "" {
+		t.Errorf("endpoint = %q, want empty", res.endpoint)
+	}
+}
+
 // TestParseReadyLineMalformedJSON covers the json.Unmarshal failure
 // branch — invalid JSON must surface as a wrapped error.
 func TestParseReadyLineMalformedJSON(t *testing.T) {
