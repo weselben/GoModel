@@ -902,6 +902,67 @@ func TestStreamConverter_InnerLoopClosedAfterSkip(t *testing.T) {
 	_ = err // race outcome is non-deterministic
 }
 
+// TestStreamConverter_InnerLoopNonEOFError covers the
+// `c.releaseAgent() / c.closed = true / c.buffer.Release() / return 0, err`
+// branches in the inner loop — when stream.Next returns a non-EOF
+// error mid-loop, the converter must release the agent, free its
+// buffer, and surface the error.
+func TestStreamConverter_InnerLoopNonEOFError(t *testing.T) {
+	var buf bytes.Buffer
+	// First frame is a recognized-but-no-match sdkMessage so the
+	// outer block's switch does not fire — buffer stays empty and we
+	// fall into the inner loop.
+	payload := []byte(`{"sdkMessage":{"type":"unknown","message":{}}}`)
+	hdr := make([]byte, 5)
+	binary.BigEndian.PutUint32(hdr[1:5], uint32(len(payload)))
+	buf.Write(hdr)
+	buf.Write(payload)
+
+	// Body returns the first frame, then a non-EOF error on the
+	// second Read call. The first frame drains via StreamReader.Next
+	// and the inner loop hits the non-EOF error path on the next
+	// Next call.
+	sr := newStreamReader(&errBody{first: buf.Bytes()})
+	sc := &streamConverter{
+		stream:     sr,
+		model:      "m",
+		created:    time.Now().Unix(),
+		buffer:     streaming.NewStreamBuffer(1024),
+		closeAgent: func() {},
+		ctx:        context.Background(),
+	}
+	out := make([]byte, 64)
+	_, err := sc.Read(out)
+	if err == nil {
+		t.Fatal("expected non-EOF error from inner loop, got nil")
+	}
+}
+
+// errBody is an io.ReadCloser that returns the first chunk (when set)
+// and then a non-EOF error on every subsequent Read. Used to drive
+// StreamReader.Next into its non-EOF error branch after a successful
+// initial frame.
+type errBody struct {
+	first    []byte
+	consumed bool
+}
+
+var errBodyErr = errors.New("simulated body read failure")
+
+func (r *errBody) Read(p []byte) (int, error) {
+	if !r.consumed && len(r.first) > 0 {
+		n := copy(p, r.first)
+		r.first = r.first[n:]
+		if len(r.first) == 0 {
+			r.consumed = true
+		}
+		return n, nil
+	}
+	return 0, errBodyErr
+}
+
+func (r *errBody) Close() error { return nil }
+
 // TestStreamConverter_InnerLoopEOFAfterSkipsReleasesAgent covers the
 // inner-loop EOF branch: releaseAgent must be called when EOF is hit
 // mid-loop, so the bridge agent is freed even when the loop exits
