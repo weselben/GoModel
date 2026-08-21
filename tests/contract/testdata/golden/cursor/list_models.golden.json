@@ -1,0 +1,35 @@
+{
+  "data": [
+    {
+      "created": 0,
+      "id": "gpt-5",
+      "metadata": {
+        "description": "OpenAI GPT-5 served through the Cursor subscription",
+        "display_name": "GPT-5"
+      },
+      "object": "model",
+      "owned_by": "cursor"
+    },
+    {
+      "created": 0,
+      "id": "claude-sonnet-4.5",
+      "metadata": {
+        "description": "Anthropic Claude Sonnet served through the Cursor subscription",
+        "display_name": "Claude Sonnet 4.5"
+      },
+      "object": "model",
+      "owned_by": "cursor"
+    },
+    {
+      "created": 0,
+      "id": "grok-4",
+      "metadata": {
+        "description": "xAI Grok served through the Cursor subscription",
+        "display_name": "Grok 4"
+      },
+      "object": "model",
+      "owned_by": "cursor"
+    }
+  ],
+  "object": "list"
+}

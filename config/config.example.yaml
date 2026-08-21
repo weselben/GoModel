@@ -345,6 +345,18 @@ providers:
     api_key: "${CHATGPT_API_KEY}"
     # models: [gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.5]
 
+  # Cursor subscription routed through the official cursor-sdk-bridge subprocess
+  # (loopback HTTP). Requires the sdk-bridge binary on PATH (or
+  # CURSOR_SDK_BRIDGE_BIN). The key is a user-level access token from the
+  # Cursor desktop app, surfaced by the bridge.
+  cursor:
+    type: cursor
+    api_key: "${CURSOR_API_KEY}"
+    # Note: the cursor provider always discovers available slugs via
+    # ListModels at runtime; the optional `models:` field is parsed by
+    # the config layer but is currently cosmetic / reserved for a future
+    # allow-list filter. Leave unset unless that lands.
+
   cohere:
     type: cohere
     api_key: "${COHERE_API_KEY}"

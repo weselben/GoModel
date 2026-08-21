@@ -1,0 +1,111 @@
+---
+title: "Cursor subscription"
+description: "Route chat traffic through a Cursor subscription via the official cursor-sdk-bridge, exposing Cursor's bundled models (including Grok) over GoModel's OpenAI-compatible API."
+icon: "message-circle"
+keywords: ["Cursor", "cursor-agent", "subscription", "Grok", "Composer", "sdk-bridge", "provider setup"]
+---
+
+The `cursor` provider routes chat traffic through a Cursor subscription by
+spawning the official [`cursor-sdk-bridge`](https://github.com/cursor/sdk-bridge)
+subprocess (MIT) and speaking its stable `sdk.v1` Connect contract over
+loopback HTTP. Usage is billed against the Cursor plan's pools — the same
+pools the `cursor-agent` CLI draws from — not pay-per-token API credit.
+
+## Configure
+
+The credential is a Cursor **User API key** (`crsr_...`), generated at
+Cursor Dashboard → API Keys:
+
+```bash
+CURSOR_API_KEY=crsr_...
+```
+
+Or in `config.yaml`:
+
+```yaml
+providers:
+  cursor:
+    type: cursor
+    api_key: "${CURSOR_API_KEY}"
+```
+
+GoModel exchanges the key for a short-lived JWT behind the scenes; the key
+itself is long-lived and re-exchanges on demand. A User API key draws from
+the same plan pools as the CLI browser login — there is no separate metered
+billing for it.
+
+The provider needs the bridge binary on the host. Install one of:
+
+```bash
+# 1. Explicit override
+CURSOR_SDK_BRIDGE_BIN=/path/to/cursor-sdk-bridge
+
+# 2. PATH lookup
+cursor-sdk-bridge  # any directory on PATH
+
+# 3. Conventional location
+~/.local/share/gomodel/bin/cursor-sdk-bridge
+```
+
+Download the matching archive from
+[cursor/sdk-bridge releases](https://github.com/cursor/sdk-bridge/releases/latest)
+and unpack so the binary lands at one of those paths. The provider spawns it
+lazily on first request with a scrubbed environment (only `CURSOR_API_KEY`
+plus `PATH`/`HOME`/`TMPDIR`/`USER`/`LANG` are inherited) and shuts it down
+cleanly when GoModel stops.
+
+<Warning>
+  The bridge binary is a hard runtime requirement. Without it the provider
+  returns a clear install-hint error; no traffic is attempted.
+</Warning>
+
+## Models
+
+`ListModels` is served from the bridge's `SdkCursorService.ListModels`, so
+`GET /v1/models` returns whatever the account's plan exposes. The provider
+always discovers the available slugs at runtime — there is no static-list
+override on the cursor provider. Which slugs exist depends on the
+subscription tier. The **Cursor Models pool** (generous included usage)
+currently includes Composer 2.5 and Grok 4.5 / 4.6 on Pro and above; a
+Hobby or trial account may only expose `composer` / `auto`. Confirm with
+a live `GET /v1/models` against your key.
+
+## Dialect and limits
+
+- Only `/v1/chat/completions` is served. `/v1/responses`, `/v1/embeddings`,
+  `/v1/files`, and `/v1/batches` answer `501` with
+  `unsupported_provider_operation`.
+- Requests are **stateless**: each chat completion creates a fresh bridge
+  agent, flattens the full message history into one user message, and
+  closes the agent when the run ends. Multi-turn quality and billing
+  semantics match a fresh `cursor-agent` session per request.
+- Streaming emits OpenAI-conservative SSE. When the bridge run result
+  carries token usage, the final chunk includes a top-level `usage` object;
+  otherwise usage is omitted and the request is recorded without token
+  counts.
+- Model IDs pass through unchanged — GoModel does not translate between
+  Cursor's internal slugs and OpenAI names.
+
+## Reported cost is not real spend
+
+Cursor subscriptions are flat-rate, but model IDs that also exist on public
+provider catalogs pick up their per-token prices in GoModel's catalog. Usage
+records and dashboard totals for `cursor` therefore show a figure that
+corresponds to no actual charge.
+
+<Warning>
+  A **budget** can reject `cursor` traffic for "spending" money the
+  subscription never charges. Scope budgets to a
+  [user path](/features/user-path) that excludes subscription traffic, or
+  leave budgets off for it.
+</Warning>
+
+## Terms of service
+
+Routing subscription traffic through a gateway sits in the same gray zone as
+the community `cursor-agent` proxies. Cursor's ToS prohibits reverse
+engineering its private protocols; this provider uses only the official
+MIT-licensed bridge and the documented User API key, which is the most
+conservative integration available — but it is not a supported Cursor
+product surface. Treat it as best-effort and keep a direct `xai` or other
+pay-per-token provider as fallback if you rely on Grok specifically.
