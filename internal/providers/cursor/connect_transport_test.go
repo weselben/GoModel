@@ -151,6 +151,19 @@ func TestStream_MarshalFailure(t *testing.T) {
 	}
 }
 
+// TestNewTransportNilClientFallsBack exercises the
+// `if httpClient == nil` branch in NewTransport — a nil client
+// must normalize to http.DefaultClient rather than be stored as nil.
+func TestNewTransportNilClientFallsBack(t *testing.T) {
+	tr := NewTransport(nil, "http://127.0.0.1:1", "tok")
+	if tr == nil {
+		t.Fatal("NewTransport(nil,...) = nil, want non-nil")
+	}
+	if tr.client == nil {
+		t.Error("tr.client = nil, want default client")
+	}
+}
+
 // TestParseReadyLineAuthTokenFileReadError covers the
 // `os.ReadFile(r.AuthTokenFile)` failure path — when the bridge
 // points at an auth token file that does not exist or is unreadable,
@@ -701,6 +714,13 @@ func TestScrubForLog(t *testing.T) {
 	want = `\u2028x\u00ad`
 	if got != want {
 		t.Errorf("scrubForLog(unicode) = %q, want %q", got, want)
+	}
+	// Invalid UTF-8 byte (continuation byte without a leading byte) →
+	// per-byte \xNN escape rather than \uNNNN.
+	got = scrubForLog([]byte{0x80, 'x'}, 64)
+	want = `\x80x`
+	if got != want {
+		t.Errorf("scrubForLog(invalid utf8) = %q, want %q", got, want)
 	}
 }
 

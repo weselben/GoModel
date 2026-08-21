@@ -1462,6 +1462,43 @@ func TestListModels_StartFailureSurfacesBadGateway(t *testing.T) {
 	}
 }
 
+// TestTransport_NilHTTPClientInProviderField exercises the
+// `if hc == nil` defensive branch in transport() — the field
+// httpClient is normally normalized at construction, but a
+// downstream mutator can still set it to nil. The check must fall
+// back to http.DefaultClient.
+func TestTransport_NilHTTPClientInProviderField(t *testing.T) {
+	t.Setenv(AttachTokenEnv, "tok")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"ok":true}`)
+	}))
+	t.Cleanup(srv.Close)
+
+	p, err := NewWithHTTPClient("cursor-key", srv.URL, nil, llmclient.Hooks{})
+	if err != nil {
+		t.Fatalf("NewWithHTTPClient: %v", err)
+	}
+	defer p.Close()
+
+	// Force the httpClient field to nil — simulates a downstream
+	// mutation that the round-3 normalization does not protect against.
+	p.mu.Lock()
+	p.httpClient = nil
+	p.mu.Unlock()
+
+	tr, err := p.transport(context.Background())
+	if err != nil {
+		t.Fatalf("transport: %v", err)
+	}
+	var out map[string]any
+	if err := tr.Unary(context.Background(), "svc", "Send", map[string]string{"k": "v"}, &out); err != nil {
+		t.Fatalf("Unary through nil-client transport: %v", err)
+	}
+}
+
 // TestTransport_NilHTTPClientInAttachModeFallsBack exercises the
 // `hc == nil` branch inside transport() when no bridge manager is
 // attached — the package default client must be used. We assert this
