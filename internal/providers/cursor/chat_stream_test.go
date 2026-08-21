@@ -792,7 +792,7 @@ func TestStreamConverter_InnerLoopResultFrameBufferReturn(t *testing.T) {
 	var buf bytes.Buffer
 	frames := []string{
 		`{"sdkMessage":{"type":"unknown","message":{}}}`,                                  // skip in inner loop
-		`{"result":{"agentId":"a","runId":"r","status":"FAILED","result":"boom","errorCode":"model_overloaded"}}`, // Result with non-OK status
+		`{"result":{"agentId":"a","runId":"r","status":"FAILED","errorCode":"model_overloaded","result":{"runId":"r","agentId":"a","status":"FAILED","result":"boom"}}}`, // Result with non-OK status
 	}
 	for _, m := range frames {
 		payload := []byte(m)
