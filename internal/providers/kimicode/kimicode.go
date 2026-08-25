@@ -2,7 +2,10 @@
 //
 // The "kimicode" provider routes to Kimi Code's OpenAI-compatible chat
 // completions endpoint, so all transport goes through the shared chat-centric
-// adapter and model IDs are forwarded unchanged.
+// adapter. A static model map (models.go) adds canonical client-facing model
+// names on top of the raw upstream IDs: raw IDs keep working unchanged, while
+// canonical names are rewritten to their upstream ID and carry the endpoint's
+// thinking control.
 package kimicode
 
 import (
@@ -38,8 +41,9 @@ var _ core.Provider = (*Provider)(nil)
 // New creates a new Kimi Code provider.
 func New(cfg providers.ProviderConfig, opts providers.ProviderOptions) core.Provider {
 	return &Provider{openai.NewChatCompatible(cfg.APIKey, opts, openai.CompatibleProviderConfig{
-		ProviderName: "kimicode",
-		BaseURL:      providers.ResolveBaseURL(cfg.BaseURL, defaultBaseURL),
+		ProviderName:     "kimicode",
+		BaseURL:          providers.ResolveBaseURL(cfg.BaseURL, defaultBaseURL),
+		AdaptChatRequest: adaptChatRequest,
 	})}
 }
 
@@ -50,7 +54,8 @@ func New(cfg providers.ProviderConfig, opts providers.ProviderOptions) core.Prov
 // provider on main: (apiKey, baseURL, httpClient, hooks).
 func NewWithHTTPClient(apiKey string, baseURL string, httpClient *http.Client, hooks llmclient.Hooks) *Provider {
 	return &Provider{openai.NewChatCompatibleWithHTTPClient(apiKey, httpClient, hooks, openai.CompatibleProviderConfig{
-		ProviderName: "kimicode",
-		BaseURL:      providers.ResolveBaseURL(baseURL, defaultBaseURL),
+		ProviderName:     "kimicode",
+		BaseURL:          providers.ResolveBaseURL(baseURL, defaultBaseURL),
+		AdaptChatRequest: adaptChatRequest,
 	})}
 }

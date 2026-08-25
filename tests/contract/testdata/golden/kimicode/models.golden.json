@@ -5,6 +5,96 @@
       "id": "kimi-for-coding",
       "object": "model",
       "owned_by": ""
+    },
+    {
+      "created": 0,
+      "id": "kimi-k2.6",
+      "metadata": {
+        "categories": [
+          "text_generation"
+        ],
+        "context_window": 262144,
+        "modes": [
+          "chat"
+        ]
+      },
+      "object": "model",
+      "owned_by": "moonshotai"
+    },
+    {
+      "created": 0,
+      "id": "kimi-k2.7-code",
+      "metadata": {
+        "categories": [
+          "text_generation"
+        ],
+        "context_window": 262144,
+        "modes": [
+          "chat"
+        ]
+      },
+      "object": "model",
+      "owned_by": "moonshotai"
+    },
+    {
+      "created": 0,
+      "id": "kimi-k2.7-code-highspeed",
+      "metadata": {
+        "categories": [
+          "text_generation"
+        ],
+        "context_window": 262144,
+        "modes": [
+          "chat"
+        ]
+      },
+      "object": "model",
+      "owned_by": "moonshotai"
+    },
+    {
+      "created": 0,
+      "id": "kimi-k3",
+      "metadata": {
+        "categories": [
+          "text_generation"
+        ],
+        "context_window": 1048576,
+        "modes": [
+          "chat"
+        ]
+      },
+      "object": "model",
+      "owned_by": "moonshotai"
+    },
+    {
+      "created": 0,
+      "id": "kimi-k3-256k",
+      "metadata": {
+        "categories": [
+          "text_generation"
+        ],
+        "context_window": 262144,
+        "modes": [
+          "chat"
+        ]
+      },
+      "object": "model",
+      "owned_by": "moonshotai"
+    },
+    {
+      "created": 0,
+      "id": "bge_m3_embed",
+      "metadata": {
+        "categories": [
+          "embedding"
+        ],
+        "context_window": 0,
+        "modes": [
+          "embedding"
+        ]
+      },
+      "object": "model",
+      "owned_by": "moonshotai"
     }
   ],
   "object": "list"
