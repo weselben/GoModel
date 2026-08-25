@@ -16,8 +16,17 @@ import (
 
 // --- adaptChatRequest -------------------------------------------------------
 
+// mapProvider returns a Provider with the static model map enabled. Tests that
+// exercise map behavior construct a Provider through NewWithHTTPClient so the
+// env is honored; this helper exists for tests that need map behavior to be
+// deterministically on regardless of test ordering.
+func mapProvider() *Provider {
+	p := &Provider{mapEnabled: true}
+	return p
+}
+
 func TestAdaptChatRequest_NilRequest(t *testing.T) {
-	got, err := adaptChatRequest(nil)
+	got, err := mapProvider().adaptChatRequest(nil)
 	require.NoError(t, err)
 	require.Nil(t, got)
 }
@@ -25,7 +34,7 @@ func TestAdaptChatRequest_NilRequest(t *testing.T) {
 func TestAdaptChatRequest_RewritesCanonicalToRaw(t *testing.T) {
 	req := &core.ChatRequest{Model: "kimi-k2.7-code"}
 
-	got, err := adaptChatRequest(req)
+	got, err := mapProvider().adaptChatRequest(req)
 	require.NoError(t, err)
 	require.NotSame(t, req, got, "canonical IDs should produce a shallow copy")
 	require.Equal(t, "kimi-for-coding", got.Model, "canonical kimi-k2.7-code must rewrite to raw kimi-for-coding")
@@ -39,7 +48,7 @@ func TestAdaptChatRequest_K2ForcedThinkingEnabled(t *testing.T) {
 		"keep_me": json.RawMessage(`"yes"`),
 	})
 
-	got, err := adaptChatRequest(req)
+	got, err := mapProvider().adaptChatRequest(req)
 	require.NoError(t, err)
 	require.Equal(t, "kimi-for-coding", got.Model)
 	require.Nil(t, got.Reasoning, "K2.7 forces thinking.type, not the typed Reasoning knob")
@@ -57,7 +66,7 @@ func TestAdaptChatRequest_K2ForcedThinkingOverridesClientThinking(t *testing.T) 
 		"thinking": json.RawMessage(`{"type":"disabled","foo":"bar"}`),
 	})
 
-	got, err := adaptChatRequest(req)
+	got, err := mapProvider().adaptChatRequest(req)
 	require.NoError(t, err)
 	thinking := got.ExtraFields.Lookup("thinking")
 	require.JSONEq(t, `{"type":"enabled"}`, string(thinking),
@@ -67,7 +76,7 @@ func TestAdaptChatRequest_K2ForcedThinkingOverridesClientThinking(t *testing.T) 
 func TestAdaptChatRequest_K26ForcedThinkingDisabled(t *testing.T) {
 	req := &core.ChatRequest{Model: "kimi-k2.6"}
 
-	got, err := adaptChatRequest(req)
+	got, err := mapProvider().adaptChatRequest(req)
 	require.NoError(t, err)
 	require.Equal(t, "kimi-for-coding", got.Model)
 	thinking := got.ExtraFields.Lookup("thinking")
@@ -79,7 +88,7 @@ func TestAdaptChatRequest_K3FlattensReasoningEffort(t *testing.T) {
 	req := &core.ChatRequest{Model: "kimi-k3"}
 	req.Reasoning = &core.Reasoning{Effort: "high"}
 
-	got, err := adaptChatRequest(req)
+	got, err := mapProvider().adaptChatRequest(req)
 	require.NoError(t, err)
 	require.Equal(t, "k3", got.Model)
 	require.Nil(t, got.Reasoning, "typed Reasoning is replaced with the flat reasoning_effort field")
@@ -91,7 +100,7 @@ func TestAdaptChatRequest_K3FlattensReasoningEffort(t *testing.T) {
 func TestAdaptChatRequest_K3PassesThroughWithoutReasoning(t *testing.T) {
 	req := &core.ChatRequest{Model: "kimi-k3"}
 
-	got, err := adaptChatRequest(req)
+	got, err := mapProvider().adaptChatRequest(req)
 	require.NoError(t, err)
 	require.Equal(t, "k3", got.Model, "canonical kimi-k3 must rewrite to raw k3 even without a reasoning knob")
 	require.Nil(t, got.Reasoning, "K3 with no Reasoning must not be mutated")
@@ -102,7 +111,7 @@ func TestAdaptChatRequest_K3PassesThroughWithoutReasoning(t *testing.T) {
 func TestAdaptChatRequest_EmbeddingsModelIsIdentity(t *testing.T) {
 	req := &core.ChatRequest{Model: "bge_m3_embed"}
 
-	got, err := adaptChatRequest(req)
+	got, err := mapProvider().adaptChatRequest(req)
 	require.NoError(t, err)
 	require.Same(t, req, got, "bge_m3_embed's canonical name is its raw name — no rewrite, same pointer")
 }
@@ -119,7 +128,7 @@ func TestAdaptChatRequest_RawIDsAreNeverRewritten(t *testing.T) {
 			req := &core.ChatRequest{Model: raw}
 			req.Reasoning = &core.Reasoning{Effort: "high"}
 
-			got, err := adaptChatRequest(req)
+			got, err := mapProvider().adaptChatRequest(req)
 			require.NoError(t, err)
 			require.Equal(t, raw, got.Model, "raw upstream IDs must not be rewritten")
 			require.Same(t, req, got, "raw IDs return the same request pointer (Postel's law: pass through)")
@@ -131,7 +140,7 @@ func TestAdaptChatRequest_RawIDsAreNeverRewritten(t *testing.T) {
 func TestAdaptChatRequest_UnknownIDsPassThrough(t *testing.T) {
 	req := &core.ChatRequest{Model: "some-future-model"}
 
-	got, err := adaptChatRequest(req)
+	got, err := mapProvider().adaptChatRequest(req)
 	require.NoError(t, err)
 	require.Same(t, req, got, "unknown IDs return the same request pointer")
 }
@@ -143,7 +152,7 @@ func TestAdaptChatRequest_DoesNotMutateCaller(t *testing.T) {
 		"client_only": json.RawMessage(`42`),
 	})
 
-	_, err := adaptChatRequest(req)
+	_, err := mapProvider().adaptChatRequest(req)
 	require.NoError(t, err)
 
 	require.Equal(t, "kimi-k2.6", req.Model, "caller's Model must remain canonical")
@@ -151,6 +160,30 @@ func TestAdaptChatRequest_DoesNotMutateCaller(t *testing.T) {
 	require.Equal(t, "high", req.Reasoning.Effort)
 	clientOnly := req.ExtraFields.Lookup("client_only")
 	require.Equal(t, `42`, string(clientOnly), "caller's ExtraFields must not be merged into")
+}
+
+func TestAdaptChatRequest_MapDisabledPassesEverythingThrough(t *testing.T) {
+	// A provider with the map disabled is a pure passthrough: even canonical
+	// IDs and any client-supplied thinking are left as-is.
+	disabled := &Provider{mapEnabled: false}
+
+	cases := []struct {
+		name string
+		req  *core.ChatRequest
+	}{
+		{"canonical k2.6", &core.ChatRequest{Model: "kimi-k2.6", Reasoning: &core.Reasoning{Effort: "high"}}},
+		{"canonical k2.7-code", &core.ChatRequest{Model: "kimi-k2.7-code"}},
+		{"canonical k3", &core.ChatRequest{Model: "kimi-k3"}},
+		{"raw kimi-for-coding", &core.ChatRequest{Model: "kimi-for-coding"}},
+		{"unknown", &core.ChatRequest{Model: "anything"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := disabled.adaptChatRequest(tc.req)
+			require.NoError(t, err)
+			require.Same(t, tc.req, got, "with the map off, every request returns the same pointer")
+		})
+	}
 }
 
 // --- ListModels -------------------------------------------------------------
@@ -246,6 +279,29 @@ func TestListModels_PropagatesUpstreamError(t *testing.T) {
 	provider := NewWithHTTPClient("k", server.URL, server.Client(), llmclient.Hooks{})
 	_, err := provider.ListModels(context.Background())
 	require.Error(t, err, "ListModels must not swallow upstream errors")
+}
+
+func TestListModels_MapDisabledIsUpstreamOnly(t *testing.T) {
+	upstream := `{
+		"object":"list",
+		"data":[
+			{"id":"kimi-for-coding","object":"model","owned_by":"moonshotai","created":1}
+		]
+	}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(upstream))
+	}))
+	defer server.Close()
+
+	t.Setenv("KIMICODE_MODEL_MAP", "off")
+	provider := NewWithHTTPClient("k", server.URL, server.Client(), llmclient.Hooks{})
+
+	resp, err := provider.ListModels(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Len(t, resp.Data, 1, "with the map off, ListModels must return the upstream list verbatim")
+	require.Equal(t, "kimi-for-coding", resp.Data[0].ID)
 }
 
 // --- end-to-end through ChatCompletion --------------------------------------

@@ -87,10 +87,11 @@ func lookupCanonical(model string) *modelEntry {
 
 // adaptChatRequest rewrites a canonical model ID to its upstream ID and
 // applies the model's thinking control. Raw and unknown IDs are returned
-// unchanged (same pointer). The argument is never mutated; a shallow copy is
+// unchanged (same pointer), as is every request when the map is disabled via
+// KIMICODE_MODEL_MAP=off. The argument is never mutated; a shallow copy is
 // returned when changes are needed.
-func adaptChatRequest(req *core.ChatRequest) (*core.ChatRequest, error) {
-	if req == nil {
+func (p *Provider) adaptChatRequest(req *core.ChatRequest) (*core.ChatRequest, error) {
+	if req == nil || !p.mapEnabled {
 		return req, nil
 	}
 	entry := lookupCanonical(req.Model)
@@ -128,13 +129,14 @@ func adaptChatRequest(req *core.ChatRequest) (*core.ChatRequest, error) {
 	return &adapted, nil
 }
 
-// ListModels returns the upstream model list plus synthesized entries for the
-// canonical names that are not already listed, each carrying the static
-// metadata (modes, categories, context window). Raw upstream entries are kept
-// as-is so the response only grows.
+// ListModels returns the upstream model list plus, when the map is enabled,
+// synthesized entries for the canonical names that are not already listed,
+// each carrying the static metadata (modes, categories, context window). Raw
+// upstream entries are kept as-is so the response only grows. With
+// KIMICODE_MODEL_MAP=off this is a pure upstream passthrough.
 func (p *Provider) ListModels(ctx context.Context) (*core.ModelsResponse, error) {
 	resp, err := p.ChatCompatible.ListModels(ctx)
-	if err != nil || resp == nil {
+	if err != nil || resp == nil || !p.mapEnabled {
 		return resp, err
 	}
 
