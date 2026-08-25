@@ -26,6 +26,7 @@ var sqlSchema = []string{
 		user_paths TEXT NOT NULL DEFAULT '[]',
 		description TEXT NOT NULL DEFAULT '',
 		slowdown DOUBLE PRECISION DEFAULT NULL,
+		disable_reasoning ` + sqlx.TypeBool + ` NOT NULL DEFAULT FALSE,
 		enabled ` + sqlx.TypeBool + ` NOT NULL DEFAULT TRUE,
 		created_at ` + sqlx.TypeInt64 + ` NOT NULL,
 		updated_at ` + sqlx.TypeInt64 + ` NOT NULL
@@ -40,19 +41,20 @@ var sqlSchema = []string{
 var virtualModelMigrations = []string{
 	"ALTER TABLE virtual_models ADD COLUMN session_affinity TEXT NOT NULL DEFAULT ''",
 	"ALTER TABLE virtual_models ADD COLUMN slowdown DOUBLE PRECISION DEFAULT NULL",
+	"ALTER TABLE virtual_models ADD COLUMN disable_reasoning " + sqlx.TypeBool + " NOT NULL DEFAULT FALSE",
 }
 
 const selectVirtualModelColumns = `
 	SELECT source, targets, strategy, session_affinity, provider_name, model, user_paths,
-		description, slowdown, enabled, created_at, updated_at
+		description, slowdown, disable_reasoning, enabled, created_at, updated_at
 	FROM virtual_models
 `
 
 const upsertVirtualModelSQL = `
 	INSERT INTO virtual_models (
-		source, targets, strategy, session_affinity, provider_name, model, user_paths, description, slowdown, enabled, created_at, updated_at
+		source, targets, strategy, session_affinity, provider_name, model, user_paths, description, slowdown, disable_reasoning, enabled, created_at, updated_at
 	)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(source) DO UPDATE SET
 		targets = excluded.targets,
 		strategy = excluded.strategy,
@@ -62,6 +64,7 @@ const upsertVirtualModelSQL = `
 		user_paths = excluded.user_paths,
 		description = excluded.description,
 		slowdown = excluded.slowdown,
+		disable_reasoning = excluded.disable_reasoning,
 		enabled = excluded.enabled,
 		updated_at = excluded.updated_at
 `
@@ -160,6 +163,7 @@ func virtualModelUpsertArgs(vm VirtualModel) ([]any, error) {
 		pathsJSON,
 		vm.Description,
 		vm.Slowdown,
+		vm.DisableReasoning,
 		vm.Enabled,
 		vm.CreatedAt.Unix(),
 		vm.UpdatedAt.Unix(),
@@ -181,6 +185,7 @@ func scanSQLVirtualModel(scanner sqlx.Row) (VirtualModel, error) {
 		&userPaths,
 		&vm.Description,
 		&vm.Slowdown,
+		&vm.DisableReasoning,
 		&vm.Enabled,
 		&createdAt,
 		&updatedAt,

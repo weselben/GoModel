@@ -72,6 +72,12 @@ models:
 #     targets:
 #       - { model: openai/gpt-4o }
 #       - { model: groq/llama-3.3-70b }
+#   # Kimi Code subscription: route the canonical K2.6 behavior through the
+#   # kimi-for-coding endpoint with thinking disabled. Set disable_reasoning on
+#   # any redirect whose target's non-thinking variant is what you want.
+#   - source: kimi-k2.6
+#     target: kimicode/kimi-for-coding
+#     disable_reasoning: true
 
 # MCP gateway: aggregate upstream MCP (Model Context Protocol) servers behind the
 # authenticated /mcp endpoint. Tools/prompts are namespaced as {server}_{name};

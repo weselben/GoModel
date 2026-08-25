@@ -91,7 +91,7 @@ func rewriteBatchItem(
 	}
 	// resolveRedirectRoutableSelector is user-path aware (scoped redirects), so a
 	// caller outside a scoped alias's user_paths gets the literal name here too.
-	resolved, err := resolveRedirectRoutableSelector(ctx, service, checker, requested, providerType)
+	resolved, _, err := resolveRedirectRoutableSelector(ctx, service, checker, requested, providerType)
 	if err != nil {
 		return nil, err
 	}

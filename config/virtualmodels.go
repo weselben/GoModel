@@ -45,6 +45,13 @@ type VirtualModelConfig struct {
 	// nil leaves the setting unspecified.
 	Slowdown *float64 `yaml:"slowdown,omitempty" json:"slowdown,omitempty"`
 
+	// DisableReasoning strips reasoning controls (the typed reasoning field and
+	// reasoning_effort) from requests through this redirect and forces the
+	// provider's thinking toggle off, so the request is served by the
+	// non-thinking model variant (e.g. Kimi Code's K2.6 behind
+	// kimi-for-coding). Only meaningful for redirects.
+	DisableReasoning bool `yaml:"disable_reasoning,omitempty" json:"disable_reasoning,omitempty"`
+
 	// Enabled toggles the entry. It defaults to true when omitted.
 	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 }

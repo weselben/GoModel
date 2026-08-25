@@ -57,6 +57,12 @@ type VirtualModel struct {
 	// enabled (the default); explicit false restores stateless balancing.
 	SessionAffinity *bool `json:"session_affinity,omitempty" bson:"session_affinity,omitempty"`
 
+	// DisableReasoning strips reasoning controls from requests through this
+	// redirect and forces the provider's thinking toggle off, so the request is
+	// served by the non-thinking model variant (e.g. Kimi Code's K2.6 behind
+	// kimi-for-coding). Only meaningful for redirects.
+	DisableReasoning bool `json:"disable_reasoning,omitempty" bson:"disable_reasoning,omitempty"`
+
 	CreatedAt time.Time `json:"created_at" bson:"created_at"`
 	UpdatedAt time.Time `json:"updated_at" bson:"updated_at"`
 
@@ -151,8 +157,9 @@ type View struct {
 	UserPaths       []string `json:"user_paths,omitempty"`
 	Description     string   `json:"description,omitempty"`
 	// Slowdown is an extra-time factor from 0.1 to 10; zero disables it.
-	Slowdown      *float64  `json:"slowdown,omitempty"`
-	Enabled       bool      `json:"enabled"`
+	Slowdown         *float64  `json:"slowdown,omitempty"`
+	DisableReasoning bool      `json:"disable_reasoning,omitempty"`
+	Enabled          bool      `json:"enabled"`
 	Managed       bool      `json:"managed,omitempty"`
 	ResolvedModel string    `json:"resolved_model,omitempty"`
 	ProviderType  string    `json:"provider_type,omitempty"`

@@ -51,6 +51,24 @@ func (s *Service) ResolveModelForUserPath(ctx context.Context, requested core.Re
 	return resolution.Resolved, changed, nil
 }
 
+// ResolveRedirectForUserPath is ResolveModelForUserPath plus the matched
+// redirect's source name, so request rewrites can consult per-redirect flags
+// (e.g. DisableReasoning) via Resolution.Source.
+func (s *Service) ResolveRedirectForUserPath(ctx context.Context, requested core.RequestedModelSelector) (Resolution, bool, error) {
+	return s.resolveRequested(requested, core.UserPathFromContext(ctx), true, core.SessionIDFromContext(ctx))
+}
+
+// DisableReasoningForSource reports whether the redirect with the given source
+// has the DisableReasoning flag set, so request rewrites can strip reasoning
+// controls before forwarding to the resolved target.
+func (s *Service) DisableReasoningForSource(source string) bool {
+	if s == nil || source == "" {
+		return false
+	}
+	entry, ok := s.snapshot().redirects[source]
+	return ok && entry.vm.DisableReasoning
+}
+
 // ResolveRefreshTarget returns a redirect target without consulting the current
 // catalog so callers can refresh an unavailable target provider before normal
 // resolution is retried.

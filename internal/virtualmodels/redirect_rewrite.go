@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/goccy/go-json"
+
 	"github.com/enterpilot/gomodel/internal/core"
 )
 
@@ -54,38 +56,41 @@ type modelProviderTypeChecker interface {
 // resolveRedirectRequestSelector resolves a request-time selector through the
 // redirect table honoring the caller's user path, so a user_paths-scoped redirect
 // is not applied for callers outside its scope (it falls through to the literal
-// name).
-func resolveRedirectRequestSelector(ctx context.Context, service *Service, requested core.RequestedModelSelector) (core.ModelSelector, error) {
+// name). It also returns the matched redirect's source, or "" when no redirect
+// applied, so callers can consult per-redirect flags.
+func resolveRedirectRequestSelector(ctx context.Context, service *Service, requested core.RequestedModelSelector) (core.ModelSelector, string, error) {
 	if service == nil {
-		return requested.Normalize()
+		selector, err := requested.Normalize()
+		return selector, "", err
 	}
-	selector, changed, err := service.ResolveModelForUserPath(ctx, requested)
+	resolution, changed, err := service.ResolveRedirectForUserPath(ctx, requested)
 	if err != nil {
-		return core.ModelSelector{}, err
+		return core.ModelSelector{}, "", err
 	}
 	if changed {
-		return selector, nil
+		return resolution.Resolved, resolution.Source, nil
 	}
-	return requested.Normalize()
+	selector, err := requested.Normalize()
+	return selector, "", err
 }
 
-func resolveRedirectRoutableSelector(ctx context.Context, service *Service, checker modelSupportChecker, requested core.RequestedModelSelector, expectedProviderType string) (core.ModelSelector, error) {
-	selector, err := resolveRedirectRequestSelector(ctx, service, requested)
+func resolveRedirectRoutableSelector(ctx context.Context, service *Service, checker modelSupportChecker, requested core.RequestedModelSelector, expectedProviderType string) (core.ModelSelector, string, error) {
+	selector, source, err := resolveRedirectRequestSelector(ctx, service, requested)
 	if err != nil {
-		return core.ModelSelector{}, err
+		return core.ModelSelector{}, "", err
 	}
 
 	resolvedModel := strings.TrimSpace(selector.QualifiedModel())
 	if resolvedModel == "" {
-		return core.ModelSelector{}, core.NewInvalidRequestError("model is required", nil)
+		return core.ModelSelector{}, "", core.NewInvalidRequestError("model is required", nil)
 	}
 	if checker == nil || !checker.Supports(resolvedModel) {
-		return core.ModelSelector{}, core.NewModelNotFoundError(resolvedModel)
+		return core.ModelSelector{}, "", core.NewModelNotFoundError(resolvedModel)
 	}
 	if err := validateResolvedProviderType(checker, selector, expectedProviderType); err != nil {
-		return core.ModelSelector{}, err
+		return core.ModelSelector{}, "", err
 	}
-	return selector, nil
+	return selector, source, nil
 }
 
 func validateResolvedProviderType(checker modelSupportChecker, selector core.ModelSelector, expectedProviderType string) error {
@@ -120,12 +125,35 @@ func rewriteChatRequest(ctx context.Context, service *Service, checker modelSupp
 	if req == nil {
 		return nil, nil
 	}
-	selector, err := resolveRedirectRoutableSelector(ctx, service, checker, core.NewRequestedModelSelector(req.Model, req.Provider), "")
+	selector, source, err := resolveRedirectRoutableSelector(ctx, service, checker, core.NewRequestedModelSelector(req.Model, req.Provider), "")
 	if err != nil {
 		return nil, err
 	}
 	forward := *req
 	forward.Model = selector.Model
 	forward.Provider = selector.Provider
+	if service.DisableReasoningForSource(source) {
+		if err := applyDisableReasoning(&forward); err != nil {
+			return nil, err
+		}
+	}
 	return &forward, nil
+}
+
+// applyDisableReasoning strips reasoning controls from the forwarded request so
+// the upstream serves the non-thinking variant of the model. The typed
+// Reasoning field and the flat reasoning_effort extra are dropped; a
+// thinking.type=disabled extra is set so providers with a thinking toggle
+// (Kimi Code, Anthropic-style) route to the non-thinking model.
+func applyDisableReasoning(req *core.ChatRequest) error {
+	req.Reasoning = nil
+	extra := req.ExtraFields.Without("reasoning_effort")
+	merged, err := core.MergeUnknownJSONFields(extra, map[string]json.RawMessage{
+		"thinking": json.RawMessage(`{"type":"disabled"}`),
+	})
+	if err != nil {
+		return core.NewInvalidRequestError("failed to disable reasoning for redirect target: "+err.Error(), err)
+	}
+	req.ExtraFields = merged
+	return nil
 }
