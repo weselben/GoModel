@@ -8,6 +8,7 @@ import (
 	"github.com/goccy/go-json"
 
 	"github.com/enterpilot/gomodel/internal/streaming"
+	"github.com/enterpilot/gomodel/internal/thinkextract"
 )
 
 // chatChunk is the subset of an OpenAI chat.completion.chunk consumed by the
@@ -19,8 +20,14 @@ type chatChunk struct {
 		Delta struct {
 			Content          string              `json:"content"`
 			ReasoningContent string              `json:"reasoning_content"`
-			StopSequence     string              `json:"stop_sequence"`
-			ToolCalls        []chatToolCallDelta `json:"tool_calls"`
+			// SynthesizedReasoning marks a reasoning_content delta that came
+			// from thinkextract tag extraction rather than the provider's
+			// own structured field. The messages converter uses it to apply
+			// the messages thinking policy; the marker never reaches the
+			// client wire output.
+			SynthesizedReasoning bool                `json:"thinkextract_synthesized"`
+			StopSequence         string              `json:"stop_sequence"`
+			ToolCalls            []chatToolCallDelta `json:"tool_calls"`
 		} `json:"delta"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
@@ -66,6 +73,20 @@ func (u chatUsage) cacheRead() int {
 // available value there. The authoritative usage still arrives in
 // message_delta, which SDK accumulators prefer.
 func NewStreamConverter(body io.ReadCloser, model string, inputTokensEstimate int) io.ReadCloser {
+	return NewStreamConverterWithPolicy(body, model, inputTokensEstimate, thinkextract.MessagesPolicyOff)
+}
+
+// NewStreamConverterWithPolicy wraps an OpenAI-style chat completion SSE
+// stream and emits the equivalent Anthropic Messages SSE event sequence,
+// applying the given policy to any reasoning delta that thinkextract marked
+// as synthesized. The returned reader owns body and closes it on Close.
+//
+// inputTokensEstimate seeds message_start's usage.input_tokens: the Anthropic
+// contract reports input tokens at stream start, but the OpenAI upstream only
+// delivers usage in the final chunk, so a heuristic estimate is the best
+// available value there. The authoritative usage still arrives in
+// message_delta, which SDK accumulators prefer.
+func NewStreamConverterWithPolicy(body io.ReadCloser, model string, inputTokensEstimate int, policy thinkextract.MessagesThinkingPolicy) io.ReadCloser {
 	return &streamConverter{
 		reader:        bufio.NewReader(body),
 		body:          body,
@@ -73,6 +94,7 @@ func NewStreamConverter(body io.ReadCloser, model string, inputTokensEstimate in
 		buffer:        streaming.NewStreamBuffer(1024),
 		toolBlock:     make(map[int]int),
 		inputEstimate: inputTokensEstimate,
+		policy:        policy,
 	}
 }
 
@@ -83,6 +105,7 @@ type streamConverter struct {
 	body   io.ReadCloser
 	buffer streaming.StreamBuffer
 	model  string
+	policy thinkextract.MessagesThinkingPolicy
 
 	started       bool
 	blockOpen     bool
@@ -170,12 +193,26 @@ func (sc *streamConverter) handleChunk(chunk *chatChunk) {
 	}
 	for _, choice := range chunk.Choices {
 		if choice.Delta.ReasoningContent != "" {
-			sc.ensureBlock("thinking")
-			sc.emit("content_block_delta", map[string]any{
-				"type":  "content_block_delta",
-				"index": sc.curIndex,
-				"delta": map[string]any{"type": "thinking_delta", "thinking": choice.Delta.ReasoningContent},
-			})
+			synthesized := choice.Delta.SynthesizedReasoning
+			switch {
+			case synthesized && sc.policy == thinkextract.MessagesPolicyOff:
+				// Synthesized reasoning under off policy: drop the delta; the
+				// tag text was stripped at extraction time so no content is lost.
+			case synthesized && sc.policy == thinkextract.MessagesPolicyRedacted:
+				sc.ensureBlock("redacted_thinking")
+				sc.emit("content_block_delta", map[string]any{
+					"type":  "content_block_delta",
+					"index": sc.curIndex,
+					"delta": map[string]any{"type": "thinking_delta", "thinking": choice.Delta.ReasoningContent},
+				})
+			default:
+				sc.ensureBlock("thinking")
+				sc.emit("content_block_delta", map[string]any{
+					"type":  "content_block_delta",
+					"index": sc.curIndex,
+					"delta": map[string]any{"type": "thinking_delta", "thinking": choice.Delta.ReasoningContent},
+				})
+			}
 		}
 		if choice.Delta.Content != "" {
 			sc.ensureBlock("text")

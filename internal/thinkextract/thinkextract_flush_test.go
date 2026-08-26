@@ -135,7 +135,7 @@ func TestTransformStream_LongOutputForcesGoroutineExit(t *testing.T) {
 	defer pw.Close()
 	input := strings.Repeat("data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\""+strings.Repeat("x", 1024)+"\"}}]}\n\n", 256)
 	src := io.NopCloser(strings.NewReader(input))
-	go transformLoop(src, pw, Options{})
+	go transformLoop(src, pw, Options{}, false)
 	// Read a small chunk then close.
 	buf := make([]byte, 256)
 	_, _ = pr.Read(buf)

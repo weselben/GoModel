@@ -99,9 +99,11 @@ type Options struct {
 	// ChatEnabled gates the translation on the chat completions surface.
 	// Nil means on.
 	ChatEnabled *bool
-	// MessagesEnabled gates the translation on the Anthropic messages
-	// surface. Nil means on.
-	MessagesEnabled *bool
+	// MessagesPolicy gates the translation on the Anthropic messages surface.
+	// Values: "off" (default), "unsigned", "redacted". Empty means off,
+	// matching the messages endpoint's default of no synthesized thinking
+	// blocks.
+	MessagesPolicy string
 }
 
 // EnabledFor reports whether the translation runs on the given surface.
@@ -114,9 +116,7 @@ func (o Options) EnabledFor(surface Surface) bool {
 			return *o.ChatEnabled
 		}
 	case SurfaceMessages:
-		if o.MessagesEnabled != nil {
-			return *o.MessagesEnabled
-		}
+		return ParseMessagesPolicy(o.MessagesPolicy) != MessagesPolicyOff
 	}
 	return true
 }

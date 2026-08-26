@@ -479,7 +479,7 @@ func (o *InferenceOrchestrator) chatCompletionProviderCall(ctx context.Context, 
 		return nil, emptyProviderResponseError("")
 	}
 	if o.thinkExtractOptions != nil && o.thinkExtractOptions.EnabledFor(thinkextract.SurfaceFrom(ctx)) {
-		thinkextract.TransformChatResponse(resp, *o.thinkExtractOptions)
+		thinkextract.TransformChatResponseForSurface(resp, *o.thinkExtractOptions, thinkextract.SurfaceFrom(ctx))
 	}
 	return resp, nil
 }
@@ -502,7 +502,7 @@ func (o *InferenceOrchestrator) streamChatCompletionProviderCall(ctx context.Con
 	}
 	if stream != nil && o.thinkExtractOptions != nil &&
 		o.thinkExtractOptions.EnabledFor(thinkextract.SurfaceFrom(ctx)) {
-		stream = thinkextract.TransformStream(stream, *o.thinkExtractOptions)
+		stream = thinkextract.TransformStreamForSurface(stream, *o.thinkExtractOptions, thinkextract.SurfaceFrom(ctx))
 	}
 	return stream, nil
 }

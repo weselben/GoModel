@@ -22,13 +22,22 @@ import (
 // Multi-choice streams are supported: a State is maintained per choice index
 // so each choice's tag boundaries resolve independently.
 func TransformStream(in io.ReadCloser, opts Options) io.ReadCloser {
+	return TransformStreamForSurface(in, opts, "")
+}
+
+// TransformStreamForSurface is TransformStream with an explicit surface so
+// synthesized reasoning deltas can be marked on the messages surface. The
+// marker (SynthesizedMarkerKey) is only emitted for the messages surface and
+// is consumed by the Anthropic messages converter; chat-surface responses
+// never carry it.
+func TransformStreamForSurface(in io.ReadCloser, opts Options, surface Surface) io.ReadCloser {
 	o := opts.withDefaults()
 	pr, pw := io.Pipe()
-	go transformLoop(in, pw, o)
+	go transformLoop(in, pw, o, surface == SurfaceMessages)
 	return pr
 }
 
-func transformLoop(in io.ReadCloser, pw *io.PipeWriter, o Options) {
+func transformLoop(in io.ReadCloser, pw *io.PipeWriter, o Options, markSynthesized bool) {
 	defer pw.Close()
 	defer in.Close()
 
@@ -66,7 +75,7 @@ func transformLoop(in io.ReadCloser, pw *io.PipeWriter, o Options) {
 			continue
 		}
 
-		rewritten, err := rewriteChunk(payload, states, o)
+		rewritten, err := rewriteChunk(payload, states, o, markSynthesized)
 		if err != nil {
 			if !writeLine(pw, line) {
 				return
@@ -96,7 +105,7 @@ func transformLoop(in io.ReadCloser, pw *io.PipeWriter, o Options) {
 //
 // All non-delta fields on every choice are preserved byte-for-byte: the
 // rewriter only mutates delta.content and delta.reasoning_content.
-func rewriteChunk(payload []byte, states map[int]*State, o Options) ([][]byte, error) {
+func rewriteChunk(payload []byte, states map[int]*State, o Options, markSynthesized bool) ([][]byte, error) {
 	var root map[string]json.RawMessage
 	if err := json.Unmarshal(payload, &root); err != nil {
 		return nil, err
@@ -155,7 +164,7 @@ func rewriteChunk(payload []byte, states map[int]*State, o Options) ([][]byte, e
 
 	out := make([][]byte, 0, len(pending))
 	for _, p := range pending {
-		newChoice, err := rewriteChoiceDelta(choices[p.choiceIdx], p.contentDelta, p.reasonDelta)
+		newChoice, err := rewriteChoiceDelta(choices[p.choiceIdx], p.contentDelta, p.reasonDelta, markSynthesized)
 		if err != nil {
 			continue
 		}
@@ -185,8 +194,10 @@ func rewriteChunk(payload []byte, states map[int]*State, o Options) ([][]byte, e
 
 // rewriteChoiceDelta returns a copy of choice with delta.content and
 // delta.reasoning_content replaced. Every other field on the choice is
-// preserved verbatim.
-func rewriteChoiceDelta(choice json.RawMessage, content, reasoning string) (json.RawMessage, error) {
+// preserved verbatim. When markSynthesized is true the delta also carries
+// the SynthesizedMarkerKey flag so the messages converter can apply its
+// thinking-block policy.
+func rewriteChoiceDelta(choice json.RawMessage, content, reasoning string, markSynthesized bool) (json.RawMessage, error) {
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(choice, &m); err != nil {
 		return nil, err
@@ -197,6 +208,9 @@ func rewriteChoiceDelta(choice json.RawMessage, content, reasoning string) (json
 	}
 	delta["content"] = content
 	delta["reasoning_content"] = reasoning
+	if markSynthesized && reasoning != "" {
+		delta[SynthesizedMarkerKey] = true
+	}
 	deltaJSON, err := json.Marshal(delta)
 	if err != nil {
 		return nil, err

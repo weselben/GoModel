@@ -7,6 +7,35 @@ import (
 	"github.com/enterpilot/gomodel/internal/core"
 )
 
+// MessagesThinkingPolicy is the policy applied on the Anthropic messages
+// surface to synthesized-from-tags reasoning. Valid values are the empty
+// string (treated as Off), "off", "unsigned", and "redacted".
+type MessagesThinkingPolicy string
+
+const (
+	MessagesPolicyOff       MessagesThinkingPolicy = "off"
+	MessagesPolicyUnsigned  MessagesThinkingPolicy = "unsigned"
+	MessagesPolicyRedacted  MessagesThinkingPolicy = "redacted"
+)
+
+// ParseMessagesPolicy normalizes a raw config value. Unknown values fall back
+// to off so a typo cannot silently change wire behaviour.
+func ParseMessagesPolicy(raw string) MessagesThinkingPolicy {
+	switch MessagesThinkingPolicy(raw) {
+	case MessagesPolicyUnsigned, MessagesPolicyRedacted:
+		return MessagesThinkingPolicy(raw)
+	default:
+		return MessagesPolicyOff
+	}
+}
+
+// SynthesizedMarkerKey is the ExtraFields key that thinkextract sets on a
+// chat response message when its reasoning_content came from tag extraction.
+// The messages converters read it to apply MessagesThinkingPolicy; the
+// marker is only emitted on the messages surface so chat-surface responses
+// never carry it.
+const SynthesizedMarkerKey = "thinkextract_synthesized"
+
 // TransformChatResponse rewrites every choice of resp whose message text
 // carries legacy think-block tags: the tags and their bodies move from the
 // message content into ExtraFields["reasoning_content"], leaving the visible
@@ -16,17 +45,47 @@ import (
 //
 // The function returns the number of choices rewritten, so callers can skip
 // downstream bookkeeping when nothing changed.
+//
+// On the messages surface, extracted reasoning is also marked via the
+// SynthesizedMarkerKey so the Anthropic dialect converter can apply
+// MessagesThinkingPolicy without affecting native provider reasoning.
 func TransformChatResponse(resp *core.ChatResponse, opts Options) int {
+	return TransformChatResponseForSurface(resp, opts, "")
+}
+
+// TransformChatResponseForSurface is TransformChatResponse with an explicit
+// surface so synthesized reasoning on the messages surface can be marked.
+func TransformChatResponseForSurface(resp *core.ChatResponse, opts Options, surface Surface) int {
 	if resp == nil {
 		return 0
 	}
+	markSynthesized := surface == SurfaceMessages
 	rewritten := 0
 	for i := range resp.Choices {
 		if transformMessage(&resp.Choices[i].Message, opts) {
 			rewritten++
+			if markSynthesized {
+				markSynthesizedOnMessage(&resp.Choices[i].Message)
+			}
 		}
 	}
 	return rewritten
+}
+
+// markSynthesizedOnMessage sets the SynthesizedMarkerKey ExtraFields flag on
+// the message so the messages converter can apply MessagesThinkingPolicy.
+func markSynthesizedOnMessage(msg *core.ResponseMessage) {
+	raw, err := json.Marshal(true)
+	if err != nil {
+		return
+	}
+	merged, err := core.MergeUnknownJSONFields(msg.ExtraFields, map[string]json.RawMessage{
+		SynthesizedMarkerKey: raw,
+	})
+	if err != nil {
+		return
+	}
+	msg.ExtraFields = merged
 }
 
 // transformMessage applies the think-block extraction to one response
@@ -45,8 +104,6 @@ func transformMessage(msg *core.ResponseMessage, opts Options) bool {
 			return false
 		}
 		msg.Content = cleaned
-		// The content was rewritten regardless of whether the block carried
-		// any reasoning text; count it.
 		setReasoning(msg, reasoning)
 		return true
 	case []core.ContentPart:
@@ -82,8 +139,6 @@ func transformContentParts(msg *core.ResponseMessage, parts []core.ContentPart, 
 		return false
 	}
 	msg.Content = parts
-	// The content parts were rewritten even when every extracted block was
-	// empty; count the rewrite and only set reasoning when there is some.
 	setReasoning(msg, reasoning.String())
 	return true
 }

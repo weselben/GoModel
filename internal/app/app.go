@@ -1391,9 +1391,9 @@ func thinkExtractOptionsFromConfig(cfg config.ThinkExtractConfig) *thinkextract.
 		return nil
 	}
 	opts := &thinkextract.Options{
-		MaxBufferBytes:  cfg.MaxBufferBytes,
-		ChatEnabled:     cfg.ChatEnabled,
-		MessagesEnabled: cfg.MessagesEnabled,
+		MaxBufferBytes: cfg.MaxBufferBytes,
+		ChatEnabled:    cfg.ChatEnabled,
+		MessagesPolicy: cfg.MessagesPolicyOrDefault(),
 	}
 	if pairs := thinkextract.ParseTagPairs(cfg.TagPairs); len(pairs) > 0 {
 		opts.TagPairs = pairs

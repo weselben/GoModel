@@ -221,7 +221,10 @@ func (s *translatedInferenceService) dispatchMessages(c *echo.Context, req *core
 			result.Meta.FailoverModel,
 			result.Stream,
 			func(stream io.ReadCloser) io.ReadCloser {
-				converted := anthropicapi.NewStreamConverter(stream, model, anthropicapi.EstimateChatInputTokens(req))
+				converted := anthropicapi.NewStreamConverterWithPolicy(
+					stream, model, anthropicapi.EstimateChatInputTokens(req),
+					s.messagesThinkingPolicy(),
+				)
 				return result.WrapDeliveryStream(ctx, converted)
 			},
 		)
@@ -243,7 +246,19 @@ func (s *translatedInferenceService) dispatchMessages(c *echo.Context, req *core
 		result.Meta.ProviderName,
 	)
 
-	return c.JSON(http.StatusOK, anthropicapi.FromChatResponse(result.Response))
+	return c.JSON(http.StatusOK, anthropicapi.FromChatResponseWithPolicy(
+		result.Response,
+		s.messagesThinkingPolicy(),
+	))
+}
+
+// messagesThinkingPolicy returns the configured messages thinking-block
+// policy, or off when the thinkextract feature is disabled entirely.
+func (s *translatedInferenceService) messagesThinkingPolicy() thinkextract.MessagesThinkingPolicy {
+	if s.thinkExtractOptions == nil {
+		return thinkextract.MessagesPolicyOff
+	}
+	return thinkextract.ParseMessagesPolicy(s.thinkExtractOptions.MessagesPolicy)
 }
 
 // decodeMessagesChatRequest reads the request body, decodes the Anthropic

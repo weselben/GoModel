@@ -17,9 +17,11 @@ type ThinkExtractConfig struct {
 	// ChatEnabled toggles the translation on the chat completions surface.
 	// Nil falls back to Enabled. Env: THINK_EXTRACT_CHAT_ENABLED.
 	ChatEnabled *bool `yaml:"chat_enabled" env:"THINK_EXTRACT_CHAT_ENABLED"`
-	// MessagesEnabled toggles the translation on the Anthropic messages
-	// surface. Nil falls back to Enabled. Env: THINK_EXTRACT_MESSAGES_ENABLED.
-	MessagesEnabled *bool `yaml:"messages_enabled" env:"THINK_EXTRACT_MESSAGES_ENABLED"`
+	// MessagesPolicy controls how synthesized reasoning is emitted on the
+	// Anthropic messages surface. Values: off (default), unsigned, redacted.
+	// "off" means no extraction runs for messages requests, so legacy tags
+	// stay in the message content unchanged. Env: THINK_EXTRACT_MESSAGES_POLICY.
+	MessagesPolicy string `yaml:"messages_policy" env:"THINK_EXTRACT_MESSAGES_POLICY"`
 	// TagPairs overrides the recognition list. The default list covers the
 	// union of vLLM/SGLang/Open WebUI standard tags. Format is a
 	// comma-separated "<open>...</close>" list, e.g.
@@ -50,11 +52,28 @@ func (c ThinkExtractConfig) IsEnabledForChat() bool {
 }
 
 // IsEnabledForMessages reports whether the translation runs on the
-// Anthropic messages surface. Falls back to the global Enabled value when
-// the per-surface pointer is unset.
+// Anthropic messages surface. The messages policy defaults to off, so the
+// translation only runs when an operator opts in explicitly. The global
+// Enabled switch is also authoritative — a global off kills the feature
+// everywhere regardless of the per-surface policy.
 func (c ThinkExtractConfig) IsEnabledForMessages() bool {
-	if c.MessagesEnabled != nil {
-		return *c.MessagesEnabled
+	if !c.IsEnabled() {
+		return false
 	}
-	return c.IsEnabled()
+	switch c.MessagesPolicy {
+	case "unsigned", "redacted":
+		return true
+	default:
+		return false
+	}
+}
+
+// MessagesPolicyOrDefault returns the configured messages policy, falling
+// back to "off" when unset so the per-call site can rely on a non-empty
+// value.
+func (c ThinkExtractConfig) MessagesPolicyOrDefault() string {
+	if c.MessagesPolicy == "" {
+		return "off"
+	}
+	return c.MessagesPolicy
 }

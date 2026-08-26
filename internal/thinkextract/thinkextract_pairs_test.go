@@ -168,8 +168,8 @@ func TestEnabledFor_PerSurfaceDefaults(t *testing.T) {
 	if !o.EnabledFor(SurfaceChat) {
 		t.Errorf("EnabledFor(chat)=false, want true")
 	}
-	if !o.EnabledFor(SurfaceMessages) {
-		t.Errorf("EnabledFor(messages)=false, want true")
+	if o.EnabledFor(SurfaceMessages) {
+		t.Errorf("EnabledFor(messages)=true, want false (messages default off)")
 	}
 	if !o.EnabledFor("") {
 		t.Errorf("EnabledFor(empty)=false, want true")
@@ -178,12 +178,11 @@ func TestEnabledFor_PerSurfaceDefaults(t *testing.T) {
 
 func TestEnabledFor_ExplicitDisable(t *testing.T) {
 	off := false
-	on := true
-	o := Options{ChatEnabled: &off, MessagesEnabled: &on}
+	o := Options{ChatEnabled: &off, MessagesPolicy: "unsigned"}
 	if o.EnabledFor(SurfaceChat) {
 		t.Errorf("chat should be disabled")
 	}
 	if !o.EnabledFor(SurfaceMessages) {
-		t.Errorf("messages should be enabled")
+		t.Errorf("messages should be enabled under unsigned policy")
 	}
 }
