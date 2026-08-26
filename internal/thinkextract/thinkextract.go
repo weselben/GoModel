@@ -28,28 +28,111 @@ const FieldReasoning = "reasoning_content"
 // recognise without risking unbounded growth on a runaway open tag.
 const defaultMaxBufferBytes = 64 * 1024
 
-// Options configures the tag delimiters and the per-stream buffer cap.
+// TagPair is a matched open/close delimiter pair that brackets a reasoning
+// block. Both fields are matched literally; no regex is used so the scanner
+// stays allocation-free and chunk-boundary-safe.
+type TagPair struct {
+	Open  string
+	Close string
+}
+
+// DefaultTagPairs is the evidence-backed default recognition list. It mirrors
+// the union of what vLLM, SGLang, and Open WebUI treat as standard legacy
+// reasoning markers (T9 research: docs.vllm.ai reasoning outputs, SGLang
+// separate-reasoning docs, Open WebUI reasoning-models docs). Granite's
+// plain-English delimiters and ERNIE's <response> answer-wrapper are
+// deliberately excluded: the former are false-positive-prone natural language,
+// the latter marks the answer rather than the reasoning.
+func DefaultTagPairs() []TagPair {
+	return []TagPair{
+		{Open: "<think>", Close: "</think>"},
+		{Open: "<thinking>", Close: "</thinking>"},
+		{Open: "<reasoning>", Close: "</reasoning>"},
+		{Open: "<reason>", Close: "</reason>"},
+		{Open: "<thought>", Close: "</thought>"},
+		{Open: "<|begin_of_thought|>", Close: "<|end_of_thought|>"},
+		{Open: "◁think▷", Close: "◁/think▷"},
+		{Open: "[THINK]", Close: "[/THINK]"},
+		{Open: "<|channel|>analysis<|message|>", Close: "<|end|>"},
+	}
+}
+
+// ParseTagPairs parses a comma-separated list of "<open>...</close>" entries
+// into TagPairs, e.g. "<think>...</think>,<thinking>...</thinking>".
+// Malformed entries (missing the "..." separator, empty open or close) are
+// skipped so one bad entry never breaks the whole list.
+func ParseTagPairs(list string) []TagPair {
+	if strings.TrimSpace(list) == "" {
+		return nil
+	}
+	var pairs []TagPair
+	for _, entry := range strings.Split(list, ",") {
+		entry = strings.TrimSpace(entry)
+		open, close, ok := strings.Cut(entry, "...")
+		if !ok || open == "" || close == "" {
+			continue
+		}
+		pairs = append(pairs, TagPair{Open: open, Close: close})
+	}
+	return pairs
+}
+
+// Options configures the tag delimiters, the per-stream buffer cap, and the
+// per-surface enable gates.
 //
-// The zero value is valid: it defaults to "<think>" / "</think>" with the
-// 64 KiB cross-chunk buffer.
+// The zero value is valid: it defaults to DefaultTagPairs with the 64 KiB
+// cross-chunk buffer and all surfaces enabled.
 type Options struct {
-	// TagOpen opens a reasoning block. Default "<think>".
+	// TagPairs is the recognition list. When empty, DefaultTagPairs applies.
+	// TagOpen/TagClose below, when set, override TagPairs with a single pair.
+	TagPairs []TagPair
+	// TagOpen opens a reasoning block. Legacy single-pair override; prefer
+	// TagPairs for new configuration.
 	TagOpen string
-	// TagClose closes a reasoning block. Default "</think>".
+	// TagClose closes a reasoning block. Legacy single-pair override; prefer
+	// TagPairs for new configuration.
 	TagClose string
 	// MaxBufferBytes caps the size of an unclosed block held in streaming
 	// state. Once exceeded the buffered text is flushed as ordinary content
 	// and no further reasoning is emitted on that stream. Default 64 KiB.
 	MaxBufferBytes int
+	// ChatEnabled gates the translation on the chat completions surface.
+	// Nil means on.
+	ChatEnabled *bool
+	// MessagesEnabled gates the translation on the Anthropic messages
+	// surface. Nil means on.
+	MessagesEnabled *bool
+}
+
+// EnabledFor reports whether the translation runs on the given surface.
+// The empty surface (no surface set on the request context) is treated as
+// enabled, matching the global-on default.
+func (o Options) EnabledFor(surface Surface) bool {
+	switch surface {
+	case SurfaceChat:
+		if o.ChatEnabled != nil {
+			return *o.ChatEnabled
+		}
+	case SurfaceMessages:
+		if o.MessagesEnabled != nil {
+			return *o.MessagesEnabled
+		}
+	}
+	return true
+}
+
+// pairs resolves the effective recognition list for these options.
+func (o Options) pairs() []TagPair {
+	if len(o.TagPairs) > 0 {
+		return o.TagPairs
+	}
+	if o.TagOpen != "" && o.TagClose != "" {
+		return []TagPair{{Open: o.TagOpen, Close: o.TagClose}}
+	}
+	return DefaultTagPairs()
 }
 
 func (o Options) withDefaults() Options {
-	if o.TagOpen == "" {
-		o.TagOpen = "<think>"
-	}
-	if o.TagClose == "" {
-		o.TagClose = "</think>"
-	}
 	if o.MaxBufferBytes <= 0 {
 		o.MaxBufferBytes = defaultMaxBufferBytes
 	}
@@ -64,13 +147,14 @@ func (o Options) withDefaults() Options {
 // When the input ends inside an open block with no matching close, Extract
 // reports found=false and returns the input unchanged: the text might still
 // receive the closing tag from a future chunk and we cannot risk dropping it.
+// With multiple tag pairs configured, the earliest opening tag wins; an
+// unclosed block of any pair aborts the whole extraction conservatively.
 func Extract(text string, opts Options) (cleaned string, reasoning string, found bool) {
 	o := opts.withDefaults()
-	if text == "" || !strings.Contains(text, o.TagOpen) {
+	pairs := o.pairs()
+	if text == "" || !containsAnyOpen(text, pairs) {
 		return text, "", false
 	}
-	openLen := len(o.TagOpen)
-	closeLen := len(o.TagClose)
 
 	var (
 		cursor    int
@@ -80,30 +164,31 @@ func Extract(text string, opts Options) (cleaned string, reasoning string, found
 		reasonSet bool
 	)
 	for cursor < len(text) {
-		rel := strings.Index(text[cursor:], o.TagOpen)
-		if rel == -1 {
+		openIdx, pairIdx := earliestOpen(text, cursor, pairs)
+		if openIdx == -1 {
 			out.WriteString(text[cursor:])
 			outSet = true
 			break
 		}
-		openIdx := cursor + rel
 		if openIdx > cursor {
 			out.WriteString(text[cursor:openIdx])
 			outSet = true
 		}
-		relClose := strings.Index(text[openIdx+openLen:], o.TagClose)
+		pair := pairs[pairIdx]
+		bodyStart := openIdx + len(pair.Open)
+		relClose := strings.Index(text[bodyStart:], pair.Close)
 		if relClose == -1 {
 			// Open block with no matching close. Treat the whole input as
 			// ordinary content: the close may yet arrive in a future chunk.
 			return text, "", false
 		}
-		body := strings.TrimSpace(text[openIdx+openLen : openIdx+openLen+relClose])
+		body := strings.TrimSpace(text[bodyStart : bodyStart+relClose])
 		if reasonSet && body != "" {
 			reason.WriteString("\n\n")
 		}
 		reason.WriteString(body)
 		reasonSet = true
-		cursor = openIdx + openLen + relClose + closeLen
+		cursor = bodyStart + relClose + len(pair.Close)
 	}
 	if !outSet {
 		out.WriteString(text)
@@ -116,13 +201,43 @@ func Extract(text string, opts Options) (cleaned string, reasoning string, found
 	return cleaned, reasoning, true
 }
 
+// containsAnyOpen reports whether text contains any configured open tag.
+func containsAnyOpen(text string, pairs []TagPair) bool {
+	for _, p := range pairs {
+		if strings.Contains(text, p.Open) {
+			return true
+		}
+	}
+	return false
+}
+
+// earliestOpen finds the first occurrence of any open tag at or after cursor.
+// It returns the absolute index and the pair index, or -1 when none matches.
+func earliestOpen(text string, cursor int, pairs []TagPair) (int, int) {
+	best, bestPair := -1, -1
+	for i, p := range pairs {
+		rel := strings.Index(text[cursor:], p.Open)
+		if rel == -1 {
+			continue
+		}
+		abs := cursor + rel
+		if best == -1 || abs < best {
+			best, bestPair = abs, i
+		}
+	}
+	return best, bestPair
+}
+
 // State holds the running state of a streaming rewrite. One State is created
 // per stream by TransformStream; a State is not safe for concurrent use.
 type State struct {
-	opts Options
+	opts  Options
+	pairs []TagPair
 
 	// inThink is true after an open tag has been seen but before its close.
-	inThink bool
+	// activePair is the pair that opened the current block.
+	inThink    bool
+	activePair int
 	// buffer holds text seen after the last emitted boundary that has not yet
 	// been classified. While inThink the buffer holds only reasoning text;
 	// otherwise it holds only visible text.
@@ -138,7 +253,8 @@ type State struct {
 
 // NewState constructs a streaming State with the given options applied.
 func NewState(opts Options) *State {
-	return &State{opts: opts.withDefaults()}
+	o := opts.withDefaults()
+	return &State{opts: o, pairs: o.pairs()}
 }
 
 // Feed pushes a chunk of assistant delta content and returns the
@@ -157,7 +273,6 @@ func (s *State) Feed(chunk string) (contentDelta string, reasoningDelta string) 
 		rest := s.buffer.String() + chunk
 		s.buffer.Reset()
 		s.opts.MaxBufferBytes = 0 // disable further buffering
-		_ = s.reasoning.String()
 		return rest, ""
 	}
 	s.buffer.WriteString(chunk)
@@ -170,13 +285,14 @@ func (s *State) Feed(chunk string) (contentDelta string, reasoningDelta string) 
 		reasoningDelta += rd
 	}
 	// Outside a think block, drain any text whose tail cannot be a partial
-	// open tag — emit it as content so the client sees progress.
+	// open tag of any configured pair — emit it as content so the client sees
+	// progress.
 	if !s.inThink {
 		bs := s.buffer.String()
 		if bs == "" {
 			return contentDelta, reasoningDelta
 		}
-		safeEnd := safeEmitPrefix(bs, s.opts.TagOpen)
+		safeEnd := safeEmitPrefixAll(bs, s.pairs)
 		if safeEnd > 0 {
 			contentDelta += bs[:safeEnd]
 			rest := bs[safeEnd:]
@@ -188,8 +304,9 @@ func (s *State) Feed(chunk string) (contentDelta string, reasoningDelta string) 
 }
 
 // Flush releases any buffered text at end-of-stream. An unclosed tag at the
-// tail of the last chunk is emitted as ordinary content so nothing is lost.
-// Reasoning accumulated in earlier Feed calls but not yet emitted is returned.
+// tail of the last chunk is re-emitted with its open tag as ordinary content
+// so nothing is lost. Reasoning accumulated in earlier Feed calls but not yet
+// emitted is returned.
 func (s *State) Flush() (contentDelta string, reasoningDelta string) {
 	full := s.reasoning.String()
 	if len(full) > s.emitted {
@@ -203,7 +320,7 @@ func (s *State) Flush() (contentDelta string, reasoningDelta string) {
 	if s.inThink {
 		// Unclosed block. Re-emit the open tag literal plus the buffered body
 		// so the original bytes round-trip even without a close.
-		contentDelta += s.opts.TagOpen + bs
+		contentDelta += s.pairs[s.activePair].Open + bs
 		s.buffer.Reset()
 		return contentDelta, reasoningDelta
 	}
@@ -220,12 +337,13 @@ func (s *State) Flush() (contentDelta string, reasoningDelta string) {
 func (s *State) tryAdvance() (contentDelta string, reasoningDelta string, advanced bool) {
 	bs := s.buffer.String()
 	if s.inThink {
-		i := strings.Index(bs, s.opts.TagClose)
+		closeTag := s.pairs[s.activePair].Close
+		i := strings.Index(bs, closeTag)
 		if i == -1 {
 			return "", "", false
 		}
 		body := strings.TrimSpace(bs[:i])
-		rest := bs[i+len(s.opts.TagClose):]
+		rest := bs[i+len(closeTag):]
 		if s.reasoning.Len() > 0 && body != "" {
 			s.reasoning.WriteString("\n\n")
 		}
@@ -242,16 +360,44 @@ func (s *State) tryAdvance() (contentDelta string, reasoningDelta string, advanc
 		}
 		return "", reasoningDelta, true
 	}
-	i := strings.Index(bs, s.opts.TagOpen)
-	if i == -1 {
+	openIdx, pairIdx := earliestOpenIn(bs, s.pairs)
+	if openIdx == -1 {
 		return "", "", false
 	}
-	contentDelta = bs[:i]
-	rest := bs[i+len(s.opts.TagOpen):]
+	contentDelta = bs[:openIdx]
+	rest := bs[openIdx+len(s.pairs[pairIdx].Open):]
 	s.buffer.Reset()
 	s.buffer.WriteString(rest)
 	s.inThink = true
+	s.activePair = pairIdx
 	return contentDelta, "", true
+}
+
+// earliestOpenIn finds the first occurrence of any open tag in bs.
+func earliestOpenIn(bs string, pairs []TagPair) (int, int) {
+	best, bestPair := -1, -1
+	for i, p := range pairs {
+		idx := strings.Index(bs, p.Open)
+		if idx == -1 {
+			continue
+		}
+		if best == -1 || idx < best {
+			best, bestPair = idx, i
+		}
+	}
+	return best, bestPair
+}
+
+// safeEmitPrefixAll returns the largest prefix length of bs whose tail cannot
+// form a prefix of any configured open tag.
+func safeEmitPrefixAll(bs string, pairs []TagPair) int {
+	safeEnd := len(bs)
+	for _, p := range pairs {
+		if end := safeEmitPrefix(bs, p.Open); end < safeEnd {
+			safeEnd = end
+		}
+	}
+	return safeEnd
 }
 
 // safeEmitPrefix returns the largest prefix length of bs whose tail cannot

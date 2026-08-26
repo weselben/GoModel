@@ -10,6 +10,7 @@ import (
 	"github.com/enterpilot/gomodel/internal/anthropicapi"
 	"github.com/enterpilot/gomodel/internal/auditlog"
 	"github.com/enterpilot/gomodel/internal/core"
+	"github.com/enterpilot/gomodel/internal/thinkextract"
 )
 
 // Messages handles POST /v1/messages.
@@ -191,6 +192,7 @@ func (s *translatedInferenceService) CountMessageTokens(c *echo.Context) error {
 func (s *translatedInferenceService) dispatchMessages(c *echo.Context, req *core.ChatRequest, workflow *core.Workflow) error {
 	s.observeLiveProviderAttempts(c, workflow)
 	ctx := c.Request().Context()
+	ctx = thinkextract.WithSurface(ctx, thinkextract.SurfaceMessages)
 	requestID := requestIDFromContextOrHeader(c.Request())
 
 	adm, err := enforceAdmission(c, s.rateLimiter, s.budgetChecker,

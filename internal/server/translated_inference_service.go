@@ -107,6 +107,7 @@ func (s *translatedInferenceService) handleChatCompletion(c *echo.Context) error
 func (s *translatedInferenceService) dispatchChatCompletion(c *echo.Context, req *core.ChatRequest, workflow *core.Workflow) error {
 	s.observeLiveProviderAttempts(c, workflow)
 	ctx := c.Request().Context()
+	ctx = thinkextract.WithSurface(ctx, thinkextract.SurfaceChat)
 	requestID := requestIDFromContextOrHeader(c.Request())
 
 	adm, err := enforceAdmission(c, s.rateLimiter, s.budgetChecker,

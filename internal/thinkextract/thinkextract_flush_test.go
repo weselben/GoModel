@@ -84,14 +84,15 @@ func TestState_Feed_EmptyChunk(t *testing.T) {
 }
 
 func TestExtract_CustomBufferCapOption(t *testing.T) {
-	// Options plumbing: a custom cap is respected and defaults fill the rest.
+	// Options plumbing: a custom cap is respected and the default pair list
+	// fills the rest.
 	opts := Options{MaxBufferBytes: 16}
 	s := NewState(opts)
 	if s.opts.MaxBufferBytes != 16 {
 		t.Errorf("cap=%d, want 16", s.opts.MaxBufferBytes)
 	}
-	if s.opts.TagOpen != "<think>" {
-		t.Errorf("TagOpen=%q, want <think>", s.opts.TagOpen)
+	if len(s.pairs) == 0 || s.pairs[0].Open != "<think>" {
+		t.Errorf("default pairs not applied: %+v", s.pairs)
 	}
 }
 

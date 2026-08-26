@@ -1384,14 +1384,19 @@ func configGuardrailDefinitions(cfg config.GuardrailsConfig) ([]guardrails.Defin
 
 // thinkExtractOptionsFromConfig converts the loaded think_extract config into
 // the options consumed by the orchestrator, or nil when the feature is off.
+// The global Enabled switch is authoritative: a per-surface true cannot
+// resurrect the feature when the global switch is off.
 func thinkExtractOptionsFromConfig(cfg config.ThinkExtractConfig) *thinkextract.Options {
 	if !cfg.IsEnabled() {
 		return nil
 	}
 	opts := &thinkextract.Options{
-		TagOpen:        cfg.TagOpen,
-		TagClose:       cfg.TagClose,
-		MaxBufferBytes: cfg.MaxBufferBytes,
+		MaxBufferBytes:  cfg.MaxBufferBytes,
+		ChatEnabled:     cfg.ChatEnabled,
+		MessagesEnabled: cfg.MessagesEnabled,
+	}
+	if pairs := thinkextract.ParseTagPairs(cfg.TagPairs); len(pairs) > 0 {
+		opts.TagPairs = pairs
 	}
 	return opts
 }
