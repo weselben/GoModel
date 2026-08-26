@@ -26,6 +26,7 @@ import (
 	"github.com/enterpilot/gomodel/internal/core"
 	"github.com/enterpilot/gomodel/internal/filestore"
 	"github.com/enterpilot/gomodel/internal/mcpgateway"
+	"github.com/enterpilot/gomodel/internal/modelnormalizer"
 	"github.com/enterpilot/gomodel/internal/responsecache"
 	"github.com/enterpilot/gomodel/internal/responsestore"
 	"github.com/enterpilot/gomodel/internal/session"
@@ -85,6 +86,7 @@ type Config struct {
 	TranslatedRequestPatcher        TranslatedRequestPatcher               // Optional: request patcher for translated routes after workflow resolution
 	BatchRequestPreparer            BatchRequestPreparer                   // Optional: batch request preparer before native provider submission
 	ExposedModelLister              ExposedModelLister                     // Optional: additional public models to merge into GET /v1/models
+	ModelNormalizer                  *modelnormalizer.Normalizer              // Optional: rewrites chat model aliases + injects thinking policy before dispatch
 	KeepOnlyAliasesAtModelsEndpoint bool                                   // Whether GET /v1/models should hide concrete provider models
 	PassthroughSemanticEnrichers    []core.PassthroughSemanticEnricher     // Optional: provider-owned passthrough semantic enrichers before workflow resolution
 	BatchStore                      batchstore.Store                       // Optional: Batch lifecycle persistence store
@@ -192,6 +194,20 @@ func New(provider core.RoutableProvider, cfg *Config) *Server {
 		handler.guardrailsHash = cfg.GuardrailsHash
 		handler.storageProbe = cfg.StorageProbe
 		handler.cacheProbe = cfg.CacheProbe
+	}
+	// Synthesize /v1/models entries from normalizer rules when no lister is
+	// configured. When a lister is already set, layer the normalizer on top
+	// of it so canonical aliases are always advertised.
+	if cfg != nil && cfg.ModelNormalizer != nil {
+		if handler.exposedModelLister == nil {
+			handler.exposedModelLister = cfg.ModelNormalizer
+		} else {
+			primary := handler.exposedModelLister
+			handler.exposedModelLister = modelnormalizer.ChainedExposedModelLister{
+				Primary:   primary.ExposedModels,
+				Secondary: cfg.ModelNormalizer.ExposedModels,
+			}
+		}
 	}
 	if cfg != nil && cfg.EnabledPassthroughProviders != nil {
 		handler.setEnabledPassthroughProviders(cfg.EnabledPassthroughProviders)
@@ -373,6 +389,13 @@ func New(provider core.RoutableProvider, cfg *Config) *Server {
 	// registered when no rewriters exist, so the default build pays nothing.
 	if cfg != nil && len(cfg.RequestRewriters) > 0 {
 		e.Use(RequestRewriteMiddleware(cfg.RequestRewriters, auditLogger))
+	}
+
+	// Model normalization runs before workflow resolution so the rewritten
+	// target model is what resolution, failover, budgets, and caching operate
+	// on. A nil normalizer skips the middleware entirely.
+	if cfg != nil && cfg.ModelNormalizer != nil {
+		e.Use(ModelNormalizerMiddleware(cfg.ModelNormalizer, auditLogger))
 	}
 
 	// Workflow resolution resolves the request-scoped workflow after auth so

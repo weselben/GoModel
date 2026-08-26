@@ -47,6 +47,12 @@ type Config struct {
 	// VirtualModels declares redirects, load balancers, and access policies as
 	// infrastructure-as-code. They override admin-store rows of the same source.
 	VirtualModels []VirtualModelConfig `yaml:"virtual_models"`
+
+	// ModelNormalizer declares canonical model aliases rewritten by the gateway
+	// before provider dispatch. Rules map an alias to a provider/model target
+	// and optionally pin a thinking policy. The MODEL_NORMALIZER env var
+	// (JSON array) merges over this list and wins per alias.
+	ModelNormalizer []ModelNormalizerRule `yaml:"model_normalizer"`
 }
 
 // LoadResult is returned by Load and bundles the application config with the raw
@@ -229,6 +235,12 @@ func Load() (*LoadResult, error) {
 		return nil, err
 	}
 	if err := applyVirtualModelsEnv(cfg, strict); err != nil {
+		return nil, err
+	}
+	if err := applyModelNormalizerEnv(cfg, strict); err != nil {
+		return nil, err
+	}
+	if err := validateModelNormalizerRules(cfg.ModelNormalizer); err != nil {
 		return nil, err
 	}
 	if err := applyTaggingEnv(cfg); err != nil {

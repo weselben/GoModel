@@ -34,6 +34,7 @@ import (
 	"github.com/enterpilot/gomodel/internal/live"
 	"github.com/enterpilot/gomodel/internal/llmclient"
 	"github.com/enterpilot/gomodel/internal/mcpgateway"
+	"github.com/enterpilot/gomodel/internal/modelnormalizer"
 	"github.com/enterpilot/gomodel/internal/pricingoverrides"
 	"github.com/enterpilot/gomodel/internal/providers"
 	"github.com/enterpilot/gomodel/internal/providers/health"
@@ -746,6 +747,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		TranslatedRequestPatcher:        translatedRequestPatcher,
 		BatchRequestPreparer:            batchRequestPreparer,
 		ExposedModelLister:              vm,
+		ModelNormalizer:                  modelnormalizer.BuildFromConfig(appCfg.ModelNormalizer),
 		KeepOnlyAliasesAtModelsEndpoint: appCfg.Models.KeepOnlyAliasesAtModelsEndpoint,
 		PassthroughSemanticEnrichers:    cfg.Factory.PassthroughSemanticEnrichers(),
 		BatchStore:                      batchResult.Store,
