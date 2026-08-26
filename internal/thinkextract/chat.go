@@ -45,7 +45,10 @@ func transformMessage(msg *core.ResponseMessage, opts Options) bool {
 			return false
 		}
 		msg.Content = cleaned
-		return setReasoning(msg, reasoning)
+		// The content was rewritten regardless of whether the block carried
+		// any reasoning text; count it.
+		setReasoning(msg, reasoning)
+		return true
 	case []core.ContentPart:
 		return transformContentParts(msg, content, opts)
 	default:
@@ -79,7 +82,10 @@ func transformContentParts(msg *core.ResponseMessage, parts []core.ContentPart, 
 		return false
 	}
 	msg.Content = parts
-	return setReasoning(msg, reasoning.String())
+	// The content parts were rewritten even when every extracted block was
+	// empty; count the rewrite and only set reasoning when there is some.
+	setReasoning(msg, reasoning.String())
+	return true
 }
 
 // setReasoning stores the extracted reasoning text on the message's extra
