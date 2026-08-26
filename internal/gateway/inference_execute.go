@@ -511,7 +511,15 @@ func (o *InferenceOrchestrator) streamChatCompletionProviderCall(ctx context.Con
 }
 
 func (o *InferenceOrchestrator) streamResponsesProviderCall(ctx context.Context, req *core.ResponsesRequest) (io.ReadCloser, error) {
-	return o.provider.StreamResponses(ctx, req)
+	stream, err := o.provider.StreamResponses(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if stream != nil && o.thinkExtractOptions != nil &&
+		o.thinkExtractOptions.EnabledFor(thinkextract.SurfaceFrom(ctx)) {
+		stream = thinkextract.TransformResponsesStream(stream, *o.thinkExtractOptions)
+	}
+	return stream, nil
 }
 
 func emptyProviderResponseError(providerType string) *core.GatewayError {
