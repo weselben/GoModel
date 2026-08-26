@@ -17,6 +17,9 @@ type ThinkExtractConfig struct {
 	// ChatEnabled toggles the translation on the chat completions surface.
 	// Nil falls back to Enabled. Env: THINK_EXTRACT_CHAT_ENABLED.
 	ChatEnabled *bool `yaml:"chat_enabled" env:"THINK_EXTRACT_CHAT_ENABLED"`
+	// ResponsesEnabled toggles the translation on the OpenAI responses
+	// surface. Nil falls back to Enabled. Env: THINK_EXTRACT_RESPONSES_ENABLED.
+	ResponsesEnabled *bool `yaml:"responses_enabled" env:"THINK_EXTRACT_RESPONSES_ENABLED"`
 	// MessagesPolicy controls how synthesized reasoning is emitted on the
 	// Anthropic messages surface. Values: off (default), unsigned, redacted.
 	// "off" means no extraction runs for messages requests, so legacy tags
@@ -47,6 +50,15 @@ func (c ThinkExtractConfig) IsEnabled() bool {
 func (c ThinkExtractConfig) IsEnabledForChat() bool {
 	if c.ChatEnabled != nil {
 		return *c.ChatEnabled
+	}
+	return c.IsEnabled()
+}
+
+// IsEnabledForResponses reports whether the translation runs on the OpenAI
+// responses surface. Falls back to the global Enabled value when unset.
+func (c ThinkExtractConfig) IsEnabledForResponses() bool {
+	if c.ResponsesEnabled != nil {
+		return *c.ResponsesEnabled
 	}
 	return c.IsEnabled()
 }

@@ -294,6 +294,7 @@ func handleWithCache[R any](
 func (s *translatedInferenceService) dispatchResponses(c *echo.Context, req *core.ResponsesRequest, workflow *core.Workflow) error {
 	s.observeLiveProviderAttempts(c, workflow)
 	ctx := c.Request().Context()
+	ctx = thinkextract.WithSurface(ctx, thinkextract.SurfaceResponses)
 	requestID := requestIDFromContextOrHeader(c.Request())
 
 	adm, err := enforceAdmission(c, s.rateLimiter, s.budgetChecker,

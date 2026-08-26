@@ -99,6 +99,9 @@ type Options struct {
 	// ChatEnabled gates the translation on the chat completions surface.
 	// Nil means on.
 	ChatEnabled *bool
+	// ResponsesEnabled gates the translation on the OpenAI responses surface.
+	// Nil means on.
+	ResponsesEnabled *bool
 	// MessagesPolicy gates the translation on the Anthropic messages surface.
 	// Values: "off" (default), "unsigned", "redacted". Empty means off,
 	// matching the messages endpoint's default of no synthesized thinking
@@ -114,6 +117,10 @@ func (o Options) EnabledFor(surface Surface) bool {
 	case SurfaceChat:
 		if o.ChatEnabled != nil {
 			return *o.ChatEnabled
+		}
+	case SurfaceResponses:
+		if o.ResponsesEnabled != nil {
+			return *o.ResponsesEnabled
 		}
 	case SurfaceMessages:
 		return ParseMessagesPolicy(o.MessagesPolicy) != MessagesPolicyOff

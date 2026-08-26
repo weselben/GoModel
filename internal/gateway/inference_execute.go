@@ -492,6 +492,9 @@ func (o *InferenceOrchestrator) responsesProviderCall(ctx context.Context, req *
 	if resp == nil {
 		return nil, emptyProviderResponseError("")
 	}
+	if o.thinkExtractOptions != nil && o.thinkExtractOptions.EnabledFor(thinkextract.SurfaceFrom(ctx)) {
+		thinkextract.TransformResponsesResponse(resp, *o.thinkExtractOptions)
+	}
 	return resp, nil
 }
 
