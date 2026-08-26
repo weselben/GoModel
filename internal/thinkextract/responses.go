@@ -80,8 +80,9 @@ func transformResponsesOutputItem(item *core.ResponsesOutputItem, opts Options) 
 	return cleaned, reasoning.String(), changed
 }
 
-// shortID returns a short opaque hex identifier. Real production code should
-// use uuid.NewString; crypto/rand is used here so the package stays
+// shortID returns a short opaque hex identifier suitable for reasoning item
+// IDs on synthesized Responses output. Real production code should use
+// uuid.NewString; crypto/rand is used here so the package stays
 // dependency-free for tests.
 func shortID() string {
 	var b [8]byte
