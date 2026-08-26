@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/enterpilot/gomodel/internal/core"
+	"github.com/enterpilot/gomodel/internal/thinkextract"
 	"github.com/enterpilot/gomodel/internal/usage"
 )
 
@@ -477,6 +478,9 @@ func (o *InferenceOrchestrator) chatCompletionProviderCall(ctx context.Context, 
 	if resp == nil {
 		return nil, emptyProviderResponseError("")
 	}
+	if o.thinkExtractOptions != nil && o.thinkExtractOptions.EnabledFor(thinkextract.SurfaceFrom(ctx)) {
+		thinkextract.TransformChatResponseForSurface(resp, *o.thinkExtractOptions, thinkextract.SurfaceFrom(ctx))
+	}
 	return resp, nil
 }
 
@@ -488,15 +492,34 @@ func (o *InferenceOrchestrator) responsesProviderCall(ctx context.Context, req *
 	if resp == nil {
 		return nil, emptyProviderResponseError("")
 	}
+	if o.thinkExtractOptions != nil && o.thinkExtractOptions.EnabledFor(thinkextract.SurfaceFrom(ctx)) {
+		thinkextract.TransformResponsesResponse(resp, *o.thinkExtractOptions)
+	}
 	return resp, nil
 }
 
 func (o *InferenceOrchestrator) streamChatCompletionProviderCall(ctx context.Context, req *core.ChatRequest) (io.ReadCloser, error) {
-	return o.provider.StreamChatCompletion(ctx, req)
+	stream, err := o.provider.StreamChatCompletion(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if stream != nil && o.thinkExtractOptions != nil &&
+		o.thinkExtractOptions.EnabledFor(thinkextract.SurfaceFrom(ctx)) {
+		stream = thinkextract.TransformStreamForSurface(stream, *o.thinkExtractOptions, thinkextract.SurfaceFrom(ctx))
+	}
+	return stream, nil
 }
 
 func (o *InferenceOrchestrator) streamResponsesProviderCall(ctx context.Context, req *core.ResponsesRequest) (io.ReadCloser, error) {
-	return o.provider.StreamResponses(ctx, req)
+	stream, err := o.provider.StreamResponses(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if stream != nil && o.thinkExtractOptions != nil &&
+		o.thinkExtractOptions.EnabledFor(thinkextract.SurfaceFrom(ctx)) {
+		stream = thinkextract.TransformResponsesStream(stream, *o.thinkExtractOptions)
+	}
+	return stream, nil
 }
 
 func emptyProviderResponseError(providerType string) *core.GatewayError {

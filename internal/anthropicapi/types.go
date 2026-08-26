@@ -109,9 +109,12 @@ type ResponseContentBlock struct {
 	Type     string          `json:"type"`
 	Text     string          `json:"text,omitempty"`
 	Thinking string          `json:"thinking,omitempty"`
-	ID       string          `json:"id,omitempty"`
-	Name     string          `json:"name,omitempty"`
-	Input    json.RawMessage `json:"input,omitempty" swaggertype:"object"`
+	// Data is set for redacted_thinking blocks; the field is opaque to the
+	// caller, so the type holds the raw bytes verbatim.
+	Data    json.RawMessage `json:"data,omitempty"`
+	ID      string          `json:"id,omitempty"`
+	Name    string          `json:"name,omitempty"`
+	Input   json.RawMessage `json:"input,omitempty" swaggertype:"object"`
 }
 
 // Usage reports Anthropic-style token usage.

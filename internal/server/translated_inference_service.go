@@ -25,6 +25,7 @@ import (
 	"github.com/enterpilot/gomodel/internal/responsecache"
 	"github.com/enterpilot/gomodel/internal/responsestore"
 	"github.com/enterpilot/gomodel/internal/streaming"
+	"github.com/enterpilot/gomodel/internal/thinkextract"
 	"github.com/enterpilot/gomodel/internal/usage"
 )
 
@@ -48,6 +49,7 @@ type translatedInferenceService struct {
 	responseStoreMu          sync.RWMutex
 	conversationStore        conversationstore.Store
 	conversationStoreMu      sync.RWMutex
+	thinkExtractOptions      *thinkextract.Options
 	// snapshotWrites tracks background response snapshot writes so shutdown
 	// can drain them before closing the response store. snapshotMu gates new
 	// writes against the drain: a handler that outlives the HTTP drain window
@@ -83,6 +85,7 @@ func (s *translatedInferenceService) newInferenceOrchestrator() *gateway.Inferen
 		UsageLogger:              s.usageLogger,
 		PricingResolver:          s.pricingResolver,
 		GuardrailsHash:           s.guardrailsHash,
+		ThinkExtractOptions:      s.thinkExtractOptions,
 	}
 	// Guarded assignment keeps the gate nil when rate limits are off (a nil
 	// RateLimiter assigned unconditionally would arrive as a typed non-nil
@@ -104,6 +107,7 @@ func (s *translatedInferenceService) handleChatCompletion(c *echo.Context) error
 func (s *translatedInferenceService) dispatchChatCompletion(c *echo.Context, req *core.ChatRequest, workflow *core.Workflow) error {
 	s.observeLiveProviderAttempts(c, workflow)
 	ctx := c.Request().Context()
+	ctx = thinkextract.WithSurface(ctx, thinkextract.SurfaceChat)
 	requestID := requestIDFromContextOrHeader(c.Request())
 
 	adm, err := enforceAdmission(c, s.rateLimiter, s.budgetChecker,
@@ -290,6 +294,7 @@ func handleWithCache[R any](
 func (s *translatedInferenceService) dispatchResponses(c *echo.Context, req *core.ResponsesRequest, workflow *core.Workflow) error {
 	s.observeLiveProviderAttempts(c, workflow)
 	ctx := c.Request().Context()
+	ctx = thinkextract.WithSurface(ctx, thinkextract.SurfaceResponses)
 	requestID := requestIDFromContextOrHeader(c.Request())
 
 	adm, err := enforceAdmission(c, s.rateLimiter, s.budgetChecker,

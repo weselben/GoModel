@@ -45,6 +45,7 @@ import (
 	"github.com/enterpilot/gomodel/internal/session"
 	"github.com/enterpilot/gomodel/internal/storage"
 	"github.com/enterpilot/gomodel/internal/tagging"
+	"github.com/enterpilot/gomodel/internal/thinkextract"
 	"github.com/enterpilot/gomodel/internal/usage"
 	"github.com/enterpilot/gomodel/internal/virtualmodels"
 	"github.com/enterpilot/gomodel/internal/workflows"
@@ -761,6 +762,7 @@ func New(ctx context.Context, cfg Config) (*App, error) {
 		SwaggerEnabled:                  swaggerEnabled,
 		Tagging:                         taggingResult.Service,
 		SessionDetector:                 session.NewDetectorFromConfig(appCfg.Session),
+		ThinkExtractOptions:             thinkExtractOptionsFromConfig(appCfg.ThinkExtract),
 		MCPEnabled:                      appCfg.MCP.Enabled,
 	}
 	if mcpResult != nil {
@@ -1378,6 +1380,26 @@ func configGuardrailDefinitions(cfg config.GuardrailsConfig) ([]guardrails.Defin
 		})
 	}
 	return definitions, nil
+}
+
+// thinkExtractOptionsFromConfig converts the loaded think_extract config into
+// the options consumed by the orchestrator, or nil when the feature is off.
+// The global Enabled switch is authoritative: a per-surface true cannot
+// resurrect the feature when the global switch is off.
+func thinkExtractOptionsFromConfig(cfg config.ThinkExtractConfig) *thinkextract.Options {
+	if !cfg.IsEnabled() {
+		return nil
+	}
+	opts := &thinkextract.Options{
+		MaxBufferBytes:   cfg.MaxBufferBytes,
+		ChatEnabled:      cfg.ChatEnabled,
+		ResponsesEnabled: cfg.ResponsesEnabled,
+		MessagesPolicy:   cfg.MessagesPolicyOrDefault(),
+	}
+	if pairs := thinkextract.ParseTagPairs(cfg.TagPairs); len(pairs) > 0 {
+		opts.TagPairs = pairs
+	}
+	return opts
 }
 
 func defaultWorkflowInput(cfg *config.Config, availableGuardrails []string, configuredGuardrails []guardrails.Definition) workflows.CreateInput {

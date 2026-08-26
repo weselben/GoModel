@@ -7,11 +7,19 @@ import (
 	"github.com/goccy/go-json"
 
 	"github.com/enterpilot/gomodel/internal/core"
+	"github.com/enterpilot/gomodel/internal/thinkextract"
 )
 
 // FromChatResponse renders a canonical chat response in the Anthropic Messages
-// response shape.
+// response shape using the default off policy for synthesized reasoning.
 func FromChatResponse(resp *core.ChatResponse) *MessagesResponse {
+	return FromChatResponseWithPolicy(resp, thinkextract.MessagesPolicyOff)
+}
+
+// FromChatResponseWithPolicy renders a canonical chat response in the Anthropic
+// Messages response shape, applying the given policy to any reasoning
+// content that thinkextract marked as synthesized (vs provider-supplied).
+func FromChatResponseWithPolicy(resp *core.ChatResponse, policy thinkextract.MessagesThinkingPolicy) *MessagesResponse {
 	out := &MessagesResponse{
 		Type:    "message",
 		Role:    "assistant",
@@ -28,8 +36,17 @@ func FromChatResponse(resp *core.ChatResponse) *MessagesResponse {
 
 	if len(resp.Choices) > 0 {
 		choice := resp.Choices[0]
-		if thinking := reasoningContent(choice.Message.ExtraFields); thinking != "" {
-			out.Content = append(out.Content, ResponseContentBlock{Type: "thinking", Thinking: thinking})
+		if thinking, synthesized := reasoningContentWithMarker(choice.Message.ExtraFields); thinking != "" {
+			switch {
+			case synthesized && policy == thinkextract.MessagesPolicyOff:
+				// Synthesized reasoning under off policy: drop the block;
+				// the tags were stripped from content at extraction time so
+				// no text is lost.
+			case synthesized && policy == thinkextract.MessagesPolicyRedacted:
+				out.Content = append(out.Content, redactedThinkingBlock(thinking))
+			default:
+				out.Content = append(out.Content, ResponseContentBlock{Type: "thinking", Thinking: thinking})
+			}
 		}
 		if text := core.ExtractTextContent(choice.Message.Content); text != "" {
 			out.Content = append(out.Content, ResponseContentBlock{Type: "text", Text: text})
@@ -93,6 +110,34 @@ func reasoningContent(fields core.UnknownJSONFields) string {
 		return ""
 	}
 	return text
+}
+
+// reasoningContentWithMarker extracts the reasoning_content together with the
+// synthesized-from-tags marker. The second return value is true when the
+// reasoning was produced by thinkextract tag extraction rather than arriving
+// from the provider as structured reasoning_content.
+func reasoningContentWithMarker(fields core.UnknownJSONFields) (string, bool) {
+	text := reasoningContent(fields)
+	if text == "" {
+		return "", false
+	}
+	if len(fields.Lookup(thinkextract.SynthesizedMarkerKey)) == 0 {
+		return text, false
+	}
+	return text, true
+}
+
+// redactedThinkingBlock renders the synthesized reasoning as a
+// redacted_thinking block. The Data field carries the raw JSON text the
+// provider would normally encrypt; for synthesized content we pass through
+// the plain string verbatim. Anthropic clients that honour redacted_thinking
+// will treat the value as opaque and surface it as such.
+func redactedThinkingBlock(text string) ResponseContentBlock {
+	encoded, err := json.Marshal(text)
+	if err != nil {
+		return ResponseContentBlock{Type: "redacted_thinking"}
+	}
+	return ResponseContentBlock{Type: "redacted_thinking", Data: encoded}
 }
 
 // argumentsToRaw renders a tool-call arguments string as a JSON object value.

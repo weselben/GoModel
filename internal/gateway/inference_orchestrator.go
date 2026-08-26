@@ -7,6 +7,7 @@ import (
 
 	"github.com/enterpilot/gomodel/internal/core"
 	"github.com/enterpilot/gomodel/internal/streaming"
+	"github.com/enterpilot/gomodel/internal/thinkextract"
 	"github.com/enterpilot/gomodel/internal/usage"
 )
 
@@ -29,6 +30,7 @@ type InferenceConfig struct {
 	PricingResolver          usage.PricingResolver
 	RouteGate                RouteGate
 	GuardrailsHash           string
+	ThinkExtractOptions      *thinkextract.Options // Optional: legacy <think> block translation; nil disables the feature
 }
 
 // InferenceOrchestrator owns translated inference workflow resolution, request
@@ -44,6 +46,7 @@ type InferenceOrchestrator struct {
 	pricingResolver          usage.PricingResolver
 	routeGate                RouteGate
 	guardrailsHash           string
+	thinkExtractOptions      *thinkextract.Options
 }
 
 // NewInferenceOrchestrator creates a translated inference orchestrator.
@@ -59,6 +62,7 @@ func NewInferenceOrchestrator(cfg InferenceConfig) *InferenceOrchestrator {
 		pricingResolver:          cfg.PricingResolver,
 		routeGate:                cfg.RouteGate,
 		guardrailsHash:           cfg.GuardrailsHash,
+		thinkExtractOptions:      cfg.ThinkExtractOptions,
 	}
 }
 
