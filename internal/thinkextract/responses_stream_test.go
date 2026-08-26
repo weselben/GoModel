@@ -168,3 +168,39 @@ data: [DONE]
 		t.Errorf("reasoning synthesized for unclosed tag: %q", out)
 	}
 }
+
+func TestTransformResponsesStream_NoDoneEOF(t *testing.T) {
+	// Stream ends without [DONE]: any buffered text flushes as ordinary
+	// content on the current message item so nothing is dropped.
+	input := "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"msg_1\",\"type\":\"message\"}}\n\n" +
+		"data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"answer <think>rest\"}\n"
+	rc := TransformResponsesStream(io.NopCloser(strings.NewReader(input)), Options{})
+	defer rc.Close()
+	out, err := ReadAll(rc)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	s := string(out)
+	if !strings.Contains(s, "rest") {
+		t.Errorf("unclosed reasoning body dropped at EOF: %q", s)
+	}
+}
+
+func TestTransformResponsesStream_MultipleBlocksSameItem(t *testing.T) {
+	// Two reasoning blocks on the same message item reuse one synthesized
+	// reasoning item id, so the client sees one contiguous reasoning span.
+	input := "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"msg_1\",\"type\":\"message\"}}\n\n" +
+		"data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"a<think>one</think>b\"}\n\n" +
+		"data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"c<think>two</think>d\"}\n\n" +
+		"data: [DONE]\n"
+	rc := TransformResponsesStream(io.NopCloser(strings.NewReader(input)), Options{})
+	defer rc.Close()
+	out, err := ReadAll(rc)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	s := string(out)
+	if strings.Count(s, "response.output_item.added") != 2 {
+		t.Errorf("expected exactly one synthesized reasoning item added (plus the message item's own added), got: %q", s)
+	}
+}
