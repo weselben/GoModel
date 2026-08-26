@@ -32,6 +32,7 @@ type Config struct {
 	HTTP       HTTPConfig       `yaml:"http"`
 	Admin      AdminConfig      `yaml:"admin"`
 	Guardrails GuardrailsConfig `yaml:"guardrails"`
+	ThinkExtract ThinkExtractConfig `yaml:"think_extract"`
 	Failover   FailoverConfig   `yaml:"failover"`
 	Workflows  WorkflowsConfig  `yaml:"workflows"`
 	Resilience ResilienceConfig `yaml:"resilience"`
@@ -186,6 +187,10 @@ func buildDefaultConfig() *Config {
 			LiveLogsHeartbeatSeconds: 15,
 		},
 		Guardrails: GuardrailsConfig{},
+		ThinkExtract: ThinkExtractConfig{
+			// Pointer-nil so IsEnabled() falls through to the default (true).
+			// Operators set THINK_EXTRACT_ENABLED=false to opt out per deployment.
+		},
 		Session: SessionConfig{
 			Enabled:      true,
 			AutoDetect:   true,

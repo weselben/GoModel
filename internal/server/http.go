@@ -30,6 +30,7 @@ import (
 	"github.com/enterpilot/gomodel/internal/responsestore"
 	"github.com/enterpilot/gomodel/internal/session"
 	"github.com/enterpilot/gomodel/internal/tagging"
+	"github.com/enterpilot/gomodel/internal/thinkextract"
 	"github.com/enterpilot/gomodel/internal/usage"
 )
 
@@ -117,6 +118,7 @@ type Config struct {
 	RequestAuthenticators           []ext.RequestAuthenticator             // Optional extension-provided request authentication mechanisms
 	Tagging                         *tagging.Service                       // Optional: request labelling based on configured tagging headers
 	SessionDetector                 *session.Detector                      // Optional: client session identification for sticky routing and audit grouping
+	ThinkExtractOptions             *thinkextract.Options                  // Optional: legacy <think> block translation options; nil disables the feature
 }
 
 // ReadinessProbe verifies that a dependency the gateway owns is reachable.
@@ -192,6 +194,7 @@ func New(provider core.RoutableProvider, cfg *Config) *Server {
 		handler.guardrailsHash = cfg.GuardrailsHash
 		handler.storageProbe = cfg.StorageProbe
 		handler.cacheProbe = cfg.CacheProbe
+		handler.thinkExtractOptions = cfg.ThinkExtractOptions
 	}
 	if cfg != nil && cfg.EnabledPassthroughProviders != nil {
 		handler.setEnabledPassthroughProviders(cfg.EnabledPassthroughProviders)

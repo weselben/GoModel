@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/enterpilot/gomodel/internal/core"
+	"github.com/enterpilot/gomodel/internal/thinkextract"
 	"github.com/enterpilot/gomodel/internal/usage"
 )
 
@@ -477,6 +478,9 @@ func (o *InferenceOrchestrator) chatCompletionProviderCall(ctx context.Context, 
 	if resp == nil {
 		return nil, emptyProviderResponseError("")
 	}
+	if o.thinkExtractOptions != nil {
+		thinkextract.TransformChatResponse(resp, *o.thinkExtractOptions)
+	}
 	return resp, nil
 }
 
@@ -492,7 +496,14 @@ func (o *InferenceOrchestrator) responsesProviderCall(ctx context.Context, req *
 }
 
 func (o *InferenceOrchestrator) streamChatCompletionProviderCall(ctx context.Context, req *core.ChatRequest) (io.ReadCloser, error) {
-	return o.provider.StreamChatCompletion(ctx, req)
+	stream, err := o.provider.StreamChatCompletion(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if stream != nil && o.thinkExtractOptions != nil {
+		stream = thinkextract.TransformStream(stream, *o.thinkExtractOptions)
+	}
+	return stream, nil
 }
 
 func (o *InferenceOrchestrator) streamResponsesProviderCall(ctx context.Context, req *core.ResponsesRequest) (io.ReadCloser, error) {

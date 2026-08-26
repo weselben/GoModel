@@ -19,6 +19,7 @@ import (
 	"github.com/enterpilot/gomodel/internal/realtime"
 	"github.com/enterpilot/gomodel/internal/responsecache"
 	"github.com/enterpilot/gomodel/internal/responsestore"
+	"github.com/enterpilot/gomodel/internal/thinkextract"
 	"github.com/enterpilot/gomodel/internal/usage"
 )
 
@@ -57,6 +58,7 @@ type Handler struct {
 	guardrailsHash               string
 	storageProbe                 ReadinessProbe
 	cacheProbe                   ReadinessProbe
+	thinkExtractOptions          *thinkextract.Options
 
 	translatedSvc     *translatedInferenceService // snapshot of handler fields at first use; server.New sets cache/hash before traffic
 	translatedSvcOnce sync.Once
@@ -162,6 +164,7 @@ func (h *Handler) translatedInference() *translatedInferenceService {
 			responseCache:            h.responseCache,
 			guardrailsHash:           h.guardrailsHash,
 			responseStore:            h.currentResponseStore(),
+			thinkExtractOptions:      h.thinkExtractOptions,
 		}
 		s.initHandlers()
 		h.storesMu.Lock()
