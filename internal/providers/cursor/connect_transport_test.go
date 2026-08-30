@@ -44,12 +44,12 @@ func newTestTransport(t *testing.T, handler http.Handler) (*Transport, *httptest
 func TestUnary_Success(t *testing.T) {
 	var calls atomic.Int32
 	var (
-		gotAuth       string
-		gotProto      string
-		gotContent    string
-		gotEndpoint   string
-		gotBody       string
-		gotMethod     string
+		gotAuth     string
+		gotProto    string
+		gotContent  string
+		gotEndpoint string
+		gotBody     string
+		gotMethod   string
 	)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
@@ -196,26 +196,26 @@ func TestParseReadyLineMissingBearerToken(t *testing.T) {
 // — when readFrame returns a non-EOF error and the caller's ctx is
 // cancelled, the cancellation error wins. We use a body that returns
 // a custom non-EOF error after the header bytes.
-type customErrReader struct{ header []byte }
+type errCustomBodyReadReader struct{ header []byte }
 
-var customErr = errors.New("custom body read failure")
+var errCustomBodyRead = errors.New("custom body read failure")
 
-func (r *customErrReader) Read(p []byte) (int, error) {
+func (r *errCustomBodyReadReader) Read(p []byte) (int, error) {
 	if len(r.header) > 0 {
 		n := copy(p, r.header)
 		r.header = r.header[n:]
 		return n, nil
 	}
-	return 0, customErr
+	return 0, errCustomBodyRead
 }
 
-func (r *customErrReader) Close() error { return nil }
+func (r *errCustomBodyReadReader) Close() error { return nil }
 
 func TestStreamReaderNextPropagatesCtxOnNonEOFReadError(t *testing.T) {
 	// Header says the payload is 99 bytes; body returns a non-EOF
 	// error from the second Read. With ctx already cancelled, Next
 	// must surface ctx.Err(), not the raw body error.
-	body := &customErrReader{header: []byte{0, 0, 0, 0, 99}}
+	body := &errCustomBodyReadReader{header: []byte{0, 0, 0, 0, 99}}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	sr := newStreamReader(body)

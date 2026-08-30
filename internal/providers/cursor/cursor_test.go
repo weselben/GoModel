@@ -751,9 +751,9 @@ func TestPickFinalTextPrecedence(t *testing.T) {
 func TestCursorRunErrorVariants(t *testing.T) {
 	// Both errorCode and message set: combined.
 	err := cursorRunError(&runStreamResult{
-		Status:     "RUN_LIFECYCLE_STATUS_ERROR",
-		ErrorCode:  "model_overloaded",
-		Result:     runResult{Result: "boom"},
+		Status:    "RUN_LIFECYCLE_STATUS_ERROR",
+		ErrorCode: "model_overloaded",
+		Result:    runResult{Result: "boom"},
 	})
 	if !strings.Contains(err.Error(), "model_overloaded") ||
 		!strings.Contains(err.Error(), "boom") {
@@ -1111,17 +1111,17 @@ func TestNewWithHTTPClient_InvalidConfigSurfacesError(t *testing.T) {
 // instead of returning an empty response.
 func TestChatCompletion_NoTerminalResultSurfacesBadGateway(t *testing.T) {
 	rs := newReplayServer(t, func(w http.ResponseWriter, path string, body []byte) {
-		switch {
-		case path == "/sdk.v1.SdkAgentService/CreateAgent":
+		switch path {
+		case "/sdk.v1.SdkAgentService/CreateAgent":
 			writeUnaryJSON(w, `{"agent_id":"agent-no-term"}`)
-		case path == "/sdk.v1.SdkAgentService/Send":
+		case "/sdk.v1.SdkAgentService/Send":
 			// Issue only assistant frames then end-of-stream — no Result.
 			writeStream(w,
 				`{"sdkMessage":{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}}`,
 			)
 			// End-of-stream frame.
-			w.Write([]byte{0x02, 0x00, 0x00, 0x00, 0x00})
-		case path == "/sdk.v1.SdkAgentService/CloseAgent":
+			_, _ = w.Write([]byte{0x02, 0x00, 0x00, 0x00, 0x00})
+		case "/sdk.v1.SdkAgentService/CloseAgent":
 			writeUnaryJSON(w, `{}`)
 		default:
 			t.Errorf("unexpected path: %s", path)
@@ -1149,15 +1149,15 @@ func TestChatCompletion_NoTerminalResultSurfacesBadGateway(t *testing.T) {
 // the same `terminal == nil` branch on the streaming path.
 func TestStreamChatCompletion_NoTerminalResultEmitsGatewayError(t *testing.T) {
 	rs := newReplayServer(t, func(w http.ResponseWriter, path string, body []byte) {
-		switch {
-		case path == "/sdk.v1.SdkAgentService/CreateAgent":
+		switch path {
+		case "/sdk.v1.SdkAgentService/CreateAgent":
 			writeUnaryJSON(w, `{"agent_id":"agent-no-term"}`)
-		case path == "/sdk.v1.SdkAgentService/Send":
+		case "/sdk.v1.SdkAgentService/Send":
 			writeStream(w,
 				`{"sdkMessage":{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}}`,
 			)
-			w.Write([]byte{0x02, 0x00, 0x00, 0x00, 0x00})
-		case path == "/sdk.v1.SdkAgentService/CloseAgent":
+			_, _ = w.Write([]byte{0x02, 0x00, 0x00, 0x00, 0x00})
+		case "/sdk.v1.SdkAgentService/CloseAgent":
 			writeUnaryJSON(w, `{}`)
 		default:
 			t.Errorf("unexpected path: %s", path)
@@ -1189,12 +1189,12 @@ func TestStreamChatCompletion_NoTerminalResultEmitsGatewayError(t *testing.T) {
 // during streaming must propagate as a typed error.
 func TestRunSend_StreamWireErrorSurfacesBadGateway(t *testing.T) {
 	rs := newReplayServer(t, func(w http.ResponseWriter, path string, body []byte) {
-		switch {
-		case path == "/sdk.v1.SdkAgentService/CreateAgent":
+		switch path {
+		case "/sdk.v1.SdkAgentService/CreateAgent":
 			writeUnaryJSON(w, `{"agent_id":"a"}`)
-		case path == "/sdk.v1.SdkAgentService/Send":
+		case "/sdk.v1.SdkAgentService/Send":
 			http.Error(w, `{"code":"unavailable","message":"bridge down"}`, http.StatusServiceUnavailable)
-		case path == "/sdk.v1.SdkAgentService/CloseAgent":
+		case "/sdk.v1.SdkAgentService/CloseAgent":
 			writeUnaryJSON(w, `{}`)
 		default:
 			t.Errorf("unexpected path: %s", path)
@@ -1218,10 +1218,10 @@ func TestRunSend_StreamWireErrorSurfacesBadGateway(t *testing.T) {
 // in a way that surfaces a non-EOF read error (not just EOF).
 func TestRunSend_StreamBodyErrorSurfacesBadGateway(t *testing.T) {
 	rs := newReplayServer(t, func(w http.ResponseWriter, path string, body []byte) {
-		switch {
-		case path == "/sdk.v1.SdkAgentService/CreateAgent":
+		switch path {
+		case "/sdk.v1.SdkAgentService/CreateAgent":
 			writeUnaryJSON(w, `{"agent_id":"a"}`)
-		case path == "/sdk.v1.SdkAgentService/Send":
+		case "/sdk.v1.SdkAgentService/Send":
 			w.Header().Set("Content-Type", "application/connect+json")
 			w.WriteHeader(http.StatusOK)
 			// Flush the headers and one valid 1-byte payload frame.
@@ -1242,7 +1242,7 @@ func TestRunSend_StreamBodyErrorSurfacesBadGateway(t *testing.T) {
 				return
 			}
 			// Fallback: just close body via header end.
-		case path == "/sdk.v1.SdkAgentService/CloseAgent":
+		case "/sdk.v1.SdkAgentService/CloseAgent":
 			writeUnaryJSON(w, `{}`)
 		default:
 			t.Errorf("unexpected path: %s", path)
@@ -1263,15 +1263,15 @@ func TestRunSend_StreamBodyErrorSurfacesBadGateway(t *testing.T) {
 // that returns a malformed JSON frame must surface as a 502.
 func TestRunSend_StreamMalformedFrameReturnsBadGateway(t *testing.T) {
 	rs := newReplayServer(t, func(w http.ResponseWriter, path string, body []byte) {
-		switch {
-		case path == "/sdk.v1.SdkAgentService/CreateAgent":
+		switch path {
+		case "/sdk.v1.SdkAgentService/CreateAgent":
 			writeUnaryJSON(w, `{"agent_id":"a"}`)
-		case path == "/sdk.v1.SdkAgentService/Send":
+		case "/sdk.v1.SdkAgentService/Send":
 			w.Header().Set("Content-Type", "application/connect+json")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte{0, 0, 0, 0, 9, '{', 'n', 'o', 't', ' ', 'v', 'a', 'l', 'i', 'd'})
-			w.Write([]byte{0x02, 0, 0, 0, 0})
-		case path == "/sdk.v1.SdkAgentService/CloseAgent":
+			_, _ = w.Write([]byte{0x02, 0, 0, 0, 0})
+		case "/sdk.v1.SdkAgentService/CloseAgent":
 			writeUnaryJSON(w, `{}`)
 		default:
 			t.Errorf("unexpected path: %s", path)
@@ -1319,10 +1319,10 @@ func TestRunSend_StreamNonEOFNextError(t *testing.T) {
 	// then a non-EOF error. We use a stub HTTP server with a body
 	// that mimics that.
 	rs := newReplayServer(t, func(w http.ResponseWriter, path string, body []byte) {
-		switch {
-		case path == "/sdk.v1.SdkAgentService/CreateAgent":
+		switch path {
+		case "/sdk.v1.SdkAgentService/CreateAgent":
 			writeUnaryJSON(w, `{"agent_id":"a"}`)
-		case path == "/sdk.v1.SdkAgentService/Send":
+		case "/sdk.v1.SdkAgentService/Send":
 			w.Header().Set("Content-Type", "application/connect+json")
 			w.WriteHeader(http.StatusOK)
 			// Emit the valid first frame.
@@ -1338,7 +1338,7 @@ func TestRunSend_StreamNonEOFNextError(t *testing.T) {
 			// rather than the body erroring. Use a truncated header
 			// instead so io.ReadFull returns a non-EOF error.
 			_, _ = w.Write([]byte{0, 0, 99, 0}) // length 99*256 = huge
-		case path == "/sdk.v1.SdkAgentService/CloseAgent":
+		case "/sdk.v1.SdkAgentService/CloseAgent":
 			writeUnaryJSON(w, `{}`)
 		default:
 			t.Errorf("unexpected path: %s", path)

@@ -796,7 +796,7 @@ func TestStreamConverter_InnerLoopEOFAfterSkipsReturnsDone(t *testing.T) {
 func TestStreamConverter_InnerLoopResultFrameBufferReturn(t *testing.T) {
 	var buf bytes.Buffer
 	frames := []string{
-		`{"sdkMessage":{"type":"unknown","message":{}}}`,                                  // skip in inner loop
+		`{"sdkMessage":{"type":"unknown","message":{}}}`, // skip in inner loop
 		`{"result":{"agentId":"a","runId":"r","status":"FAILED","errorCode":"model_overloaded","result":{"runId":"r","agentId":"a","status":"FAILED","result":"boom"}}}`, // Result with non-OK status
 	}
 	for _, m := range frames {
@@ -864,24 +864,52 @@ func TestStreamConverter_InnerLoopAssistantReturnsBuffered(t *testing.T) {
 	}
 }
 
+// closingReader flips the converter's closed flag once the first frame's
+// bytes have been consumed, deterministically triggering the inner loop's
+// closed branch without a data race.
+type closingReader struct {
+	data          []byte
+	off           int
+	firstFrameEnd int
+	sc            *streamConverter
+}
+
+func (r *closingReader) Read(p []byte) (int, error) {
+	if r.sc != nil && r.off >= r.firstFrameEnd {
+		r.sc.closed = true
+	}
+	if r.off >= len(r.data) {
+		return 0, io.EOF
+	}
+	n := copy(p, r.data[r.off:])
+	r.off += n
+	return n, nil
+}
+
+func (r *closingReader) Close() error { return nil }
+
 // TestStreamConverter_InnerLoopClosedAfterSkip covers the
 // `if c.closed { return 0, io.EOF }` branch in the inner loop — once
 // the converter is closed mid-loop, the next iteration returns EOF
-// without touching the underlying stream. We trigger this by
-// concurrently closing the converter from a goroutine while Read is
-// iterating.
+// without touching the underlying stream. Triggered deterministically:
+// the reader closes the converter once the first frame is consumed.
 func TestStreamConverter_InnerLoopClosedAfterSkip(t *testing.T) {
 	var buf bytes.Buffer
-	// Many unrecognized frames so the inner loop iterates.
-	for i := 0; i < 64; i++ {
+	// Two unrecognized frames: the first keeps the inner loop iterating,
+	// the second is read while the converter is being closed.
+	for i := 0; i < 2; i++ {
 		payload := []byte(`{"sdkMessage":{"type":"unknown","message":{}}}`)
 		hdr := make([]byte, 5)
 		binary.BigEndian.PutUint32(hdr[1:5], uint32(len(payload)))
 		buf.Write(hdr)
 		buf.Write(payload)
 	}
+	raw := buf.Bytes()
+	// Frame size = 5-byte header + payload; both frames are identical.
+	frameLen := len(raw) / 2
 
-	sr := newStreamReader(io.NopCloser(&buf))
+	cr := &closingReader{data: raw, firstFrameEnd: frameLen}
+	sr := newStreamReader(cr)
 	sc := &streamConverter{
 		stream:     sr,
 		model:      "m",
@@ -890,21 +918,13 @@ func TestStreamConverter_InnerLoopClosedAfterSkip(t *testing.T) {
 		closeAgent: func() {},
 		ctx:        context.Background(),
 	}
-
-	// Race: close the converter while Read is in the inner loop. The
-	// next iteration hits the `if c.closed` guard and returns EOF.
-	// Note: streamConverter does not synchronize access; the race is
-	// intentional — the test gives coverage tooling a chance to hit
-	// the branch under -race. The deferred assertion accepts either
-	// EOF (closed branch fired) or [DONE] (loop completed first).
-	go func() {
-		time.Sleep(1 * time.Millisecond)
-		sc.closed = true
-	}()
+	cr.sc = sc
 
 	out := make([]byte, 64)
 	_, err := sc.Read(out)
-	_ = err // race outcome is non-deterministic
+	if err != io.EOF {
+		t.Fatalf("Read err = %v, want io.EOF (closed branch)", err)
+	}
 }
 
 // TestStreamConverter_InnerLoopNonEOFError covers the

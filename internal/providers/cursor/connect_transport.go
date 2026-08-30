@@ -25,6 +25,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/goccy/go-json"
@@ -200,8 +201,12 @@ func encodeRequestFrame(payload []byte) ([]byte, error) {
 
 // StreamReader yields one envelope frame payload at a time. The end-of-stream
 // frame is consumed exactly once and surfaces as io.EOF (clean) or as a typed
-// error parsed from its payload.
+// error parsed from its payload. Close is safe under concurrent use: it
+// holds the same mutex as Next, and the body pointer is read under that
+// mutex so a caller's Close racing a Next's context.AfterFunc Close is
+// serialized.
 type StreamReader struct {
+	mu   sync.Mutex
 	body io.ReadCloser
 	done bool
 }
@@ -217,11 +222,18 @@ func newStreamReader(body io.ReadCloser) *StreamReader {
 // frame. The ctx parameter is honoured: a cancellation closes the body
 // so an in-progress block read returns immediately.
 func (r *StreamReader) Next(ctx context.Context) (json.RawMessage, error) {
+	r.mu.Lock()
 	if r.done {
-		// We already consumed the terminal frame on a previous call; never
-		// hand it back twice.
+		r.mu.Unlock()
 		return nil, io.EOF
 	}
+	if r.body == nil {
+		r.mu.Unlock()
+		return nil, io.EOF
+	}
+	body := r.body
+	r.mu.Unlock()
+
 	// Wire ctx into the body so a caller cancel unblocks a stalled read.
 	// AfterFunc is no-op when ctx is already cancelled or done; using it
 	// keeps the happy path cheap (no extra goroutine unless we are
@@ -231,12 +243,9 @@ func (r *StreamReader) Next(ctx context.Context) (json.RawMessage, error) {
 	})
 	defer stop()
 	for {
-		flags, payload, err := readFrame(r.body)
+		flags, payload, err := readFrame(body)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				// Server closed the body without an explicit end frame —
-				// treat as a clean stream end. Any end-frame error has
-				// already been surfaced on the call that consumed it.
 				return nil, io.EOF
 			}
 			if ctxErr := ctx.Err(); ctxErr != nil {
@@ -248,7 +257,9 @@ func (r *StreamReader) Next(ctx context.Context) (json.RawMessage, error) {
 			return nil, &UnsupportedError{Reason: "cursor: compressed Connect frames are not supported"}
 		}
 		if flags&frameFlagEndOfStream != 0 {
+			r.mu.Lock()
 			r.done = true
+			r.mu.Unlock()
 			if endErr := parseEndStream(payload); endErr != nil {
 				return nil, endErr
 			}
@@ -265,7 +276,11 @@ func (r *StreamReader) Next(ctx context.Context) (json.RawMessage, error) {
 }
 
 // Close releases the underlying body. Safe to call multiple times.
+// Holds the mutex so a caller's Close racing a Next context.AfterFunc
+// Close is serialized.
 func (r *StreamReader) Close() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.body == nil {
 		return nil
 	}
