@@ -301,6 +301,11 @@ workflows:
 # Global resilience settings (applied to all providers by default)
 # Individual providers can override any of these values.
 resilience:
+  # env: STREAM_REPETITION_LIMIT; abort a chat SSE stream when the same text
+  # unit (single token or multi-token chain) repeats this many times
+  # consecutively. The upstream request is cancelled, the repeated tail is
+  # stripped, and the client receives a clean [DONE]. 0 disables the guard.
+  stream_repetition_limit: 0
   retry:
     max_retries: 3
     initial_backoff: 1s

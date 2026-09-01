@@ -49,6 +49,9 @@ func DefaultCircuitBreakerConfig() CircuitBreakerConfig {
 type ResilienceConfig struct {
 	Retry          RetryConfig          `yaml:"retry"`
 	CircuitBreaker CircuitBreakerConfig `yaml:"circuit_breaker"`
+	// StreamRepetitionLimit aborts a chat SSE stream when the same text unit
+	// repeats this many times consecutively. 0 (default) disables the guard.
+	StreamRepetitionLimit int `yaml:"stream_repetition_limit" env:"STREAM_REPETITION_LIMIT"`
 }
 
 // RawResilienceConfig holds optional per-provider resilience overrides from YAML.
