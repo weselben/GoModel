@@ -47,10 +47,11 @@ func (o *InferenceOrchestrator) StreamChatCompletion(ctx context.Context, workfl
 		return nil, err
 	}
 	return &StreamResult{
-		Stream:           stream,
-		slowdownFactor:   workflowSlowdown(workflow),
-		inferenceStarted: started,
-		Meta:             meta,
+		Stream:            stream,
+		slowdownFactor:    workflowSlowdown(workflow),
+		inferenceStarted:  started,
+		repetitionLimit:   o.streamRepetitionLimit,
+		Meta:              meta,
 	}, nil
 }
 
@@ -93,10 +94,11 @@ func (o *InferenceOrchestrator) StreamResponses(ctx context.Context, workflow *c
 		return nil, err
 	}
 	return &StreamResult{
-		Stream:           stream,
-		slowdownFactor:   workflowSlowdown(workflow),
-		inferenceStarted: started,
-		Meta:             meta,
+		Stream:            stream,
+		slowdownFactor:    workflowSlowdown(workflow),
+		inferenceStarted:  started,
+		repetitionLimit:   o.streamRepetitionLimit,
+		Meta:              meta,
 	}, nil
 }
 

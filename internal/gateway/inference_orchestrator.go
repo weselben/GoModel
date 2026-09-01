@@ -30,6 +30,7 @@ type InferenceConfig struct {
 	PricingResolver          usage.PricingResolver
 	RouteGate                RouteGate
 	GuardrailsHash           string
+	StreamRepetitionLimit    int
 }
 
 // InferenceOrchestrator owns translated inference workflow resolution, request
@@ -46,6 +47,7 @@ type InferenceOrchestrator struct {
 	pricingResolver          usage.PricingResolver
 	routeGate                RouteGate
 	guardrailsHash           string
+	streamRepetitionLimit    int
 }
 
 // NewInferenceOrchestrator creates a translated inference orchestrator.
@@ -62,6 +64,7 @@ func NewInferenceOrchestrator(cfg InferenceConfig) *InferenceOrchestrator {
 		pricingResolver:          cfg.PricingResolver,
 		routeGate:                cfg.RouteGate,
 		guardrailsHash:           cfg.GuardrailsHash,
+		streamRepetitionLimit:    cfg.StreamRepetitionLimit,
 	}
 }
 
@@ -127,15 +130,19 @@ type StreamResult struct {
 	Stream io.ReadCloser
 	Meta   ExecutionMeta
 
-	slowdownFactor   float64
-	inferenceStarted time.Time
+	slowdownFactor    float64
+	inferenceStarted  time.Time
+	repetitionLimit   int
 }
 
-// WrapDeliveryStream applies this result's client-facing slowdown after any
-// accounting or persistence wrappers have been attached to stream.
+// WrapDeliveryStream applies the repetition guard and this result's
+// client-facing slowdown after any accounting or persistence wrappers have
+// been attached to stream. The guard sits inside the slowdown so a detected
+// loop still drains cleanly through the delay queue before EOF.
 func (r *StreamResult) WrapDeliveryStream(ctx context.Context, stream io.ReadCloser) io.ReadCloser {
 	if r == nil {
 		return stream
 	}
+	stream = streaming.NewRepetitionGuardStream(stream, r.repetitionLimit)
 	return streaming.NewSlowdownStream(ctx, stream, r.slowdownFactor, r.inferenceStarted)
 }

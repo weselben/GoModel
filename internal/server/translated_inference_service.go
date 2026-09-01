@@ -55,6 +55,7 @@ type translatedInferenceService struct {
 	snapshotWrites   sync.WaitGroup
 	snapshotMu       sync.RWMutex
 	snapshotDraining bool
+	streamRepetitionLimit int
 
 	orchestrator *gateway.InferenceOrchestrator
 
@@ -84,6 +85,7 @@ func (s *translatedInferenceService) newInferenceOrchestrator() *gateway.Inferen
 		UsageLogger:              s.usageLogger,
 		PricingResolver:          s.pricingResolver,
 		GuardrailsHash:           s.guardrailsHash,
+		StreamRepetitionLimit:    s.streamRepetitionLimit,
 	}
 	// Guarded assignment keeps the gate nil when rate limits are off (a nil
 	// RateLimiter assigned unconditionally would arrive as a typed non-nil

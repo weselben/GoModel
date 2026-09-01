@@ -57,6 +57,7 @@ type Handler struct {
 	storageProbe                 ReadinessProbe
 	cacheProbe                   ReadinessProbe
 	versionChecker               *versioncheck.Checker
+	streamRepetitionLimit        int
 
 	translatedSvc     *translatedInferenceService // snapshot of handler fields at first use; server.New sets cache/hash before traffic
 	translatedSvcOnce sync.Once
@@ -163,6 +164,7 @@ func (h *Handler) translatedInference() *translatedInferenceService {
 			responseCache:            h.responseCache,
 			guardrailsHash:           h.guardrailsHash,
 			responseStore:            h.currentResponseStore(),
+			streamRepetitionLimit:    h.streamRepetitionLimit,
 		}
 		s.initHandlers()
 		h.storesMu.Lock()
