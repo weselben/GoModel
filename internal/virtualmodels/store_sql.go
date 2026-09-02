@@ -42,19 +42,23 @@ var virtualModelMigrations = []string{
 	"ALTER TABLE virtual_models ADD COLUMN session_affinity TEXT NOT NULL DEFAULT ''",
 	"ALTER TABLE virtual_models ADD COLUMN slowdown DOUBLE PRECISION DEFAULT NULL",
 	"ALTER TABLE virtual_models ADD COLUMN failover TEXT NOT NULL DEFAULT ''",
+	"ALTER TABLE virtual_models ADD COLUMN repetition_limit INTEGER DEFAULT NULL",
+	"ALTER TABLE virtual_models ADD COLUMN repetition_max_pattern INTEGER DEFAULT NULL",
 }
 
 const selectVirtualModelColumns = `
 	SELECT source, targets, strategy, session_affinity, failover, provider_name, model, user_paths,
-		description, slowdown, enabled, created_at, updated_at
+		description, slowdown, repetition_limit, repetition_max_pattern, enabled, created_at, updated_at
 	FROM virtual_models
 `
 
 const upsertVirtualModelSQL = `
 	INSERT INTO virtual_models (
-		source, targets, strategy, session_affinity, failover, provider_name, model, user_paths, description, slowdown, enabled, created_at, updated_at
+		source, targets, strategy, session_affinity, failover, provider_name, model, user_paths,
+		description, slowdown, repetition_limit, repetition_max_pattern,
+		enabled, created_at, updated_at
 	)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(source) DO UPDATE SET
 		targets = excluded.targets,
 		strategy = excluded.strategy,
@@ -65,6 +69,8 @@ const upsertVirtualModelSQL = `
 		user_paths = excluded.user_paths,
 		description = excluded.description,
 		slowdown = excluded.slowdown,
+		repetition_limit = excluded.repetition_limit,
+		repetition_max_pattern = excluded.repetition_max_pattern,
 		enabled = excluded.enabled,
 		updated_at = excluded.updated_at
 `
@@ -164,6 +170,8 @@ func virtualModelUpsertArgs(vm VirtualModel) ([]any, error) {
 		pathsJSON,
 		vm.Description,
 		vm.Slowdown,
+		vm.RepetitionLimit,
+		vm.RepetitionMaxPattern,
 		vm.Enabled,
 		vm.CreatedAt.Unix(),
 		vm.UpdatedAt.Unix(),
@@ -186,6 +194,8 @@ func scanSQLVirtualModel(scanner sqlx.Row) (VirtualModel, error) {
 		&userPaths,
 		&vm.Description,
 		&vm.Slowdown,
+		&vm.RepetitionLimit,
+		&vm.RepetitionMaxPattern,
 		&vm.Enabled,
 		&createdAt,
 		&updatedAt,

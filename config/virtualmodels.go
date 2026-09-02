@@ -51,6 +51,16 @@ type VirtualModelConfig struct {
 	// nil leaves the setting unspecified.
 	Slowdown *float64 `yaml:"slowdown,omitempty" json:"slowdown,omitempty"`
 
+	// RepetitionLimit is the consecutive-repeat count that aborts the stream.
+	// Zero explicitly disables the guard (overrides any global limit); nil
+	// leaves the global setting in force.
+	RepetitionLimit *int `yaml:"repetition_limit,omitempty" json:"repetition_limit,omitempty"`
+
+	// RepetitionMaxPattern is the maximum token chain the guard treats as one
+	// repeating unit. Valid range is 1..64 when set; nil leaves the global
+	// default (8) in force.
+	RepetitionMaxPattern *int `yaml:"repetition_max_pattern,omitempty" json:"repetition_max_pattern,omitempty"`
+
 	// Enabled toggles the entry. It defaults to true when omitted.
 	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 }
