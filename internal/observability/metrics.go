@@ -51,6 +51,15 @@ var (
 		[]string{"provider", "provider_name", "operation"},
 	)
 
+	// StreamRepetitionTriggers counts streaming responses truncated by the repetition guard.
+	StreamRepetitionTriggers = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "gomodel_stream_repetition_triggers_total",
+			Help: "Number of streaming responses truncated by the repetition guard",
+		},
+		[]string{"provider", "model"},
+	)
+
 	// CircuitBreakerState reports each provider's circuit breaker state as of
 	// its most recent request (0=closed, 1=half-open, 2=open). The value is
 	// updated per request, so an idle provider keeps its last observed state.

@@ -35,6 +35,22 @@ func (o *InferenceOrchestrator) DispatchChatCompletion(
 	})
 }
 
+// resolveEffectiveRepetition selects the stream repetition-guard settings for
+// this request: a per-request (virtual-model) override wins wholesale — a
+// limit of 0 there disables the guard for this request — while a 0 max_pattern
+// (unset sibling of an override) inherits the orchestrator global/default.
+func (o *InferenceOrchestrator) resolveEffectiveRepetition(workflow *core.Workflow) (limit, maxPattern int) {
+	limit = o.streamRepetitionLimit
+	maxPattern = o.streamRepetitionMaxPattern
+	if overrideLimit, overrideMax, ok := workflowRepetition(workflow); ok {
+		limit = overrideLimit
+		if overrideMax != 0 {
+			maxPattern = overrideMax
+		}
+	}
+	return limit, maxPattern
+}
+
 // StreamChatCompletion opens a chat SSE stream. Stream usage is recorded by the caller's stream observer.
 func (o *InferenceOrchestrator) StreamChatCompletion(ctx context.Context, workflow *core.Workflow, req *core.ChatRequest) (*StreamResult, error) {
 	if err := o.validateProviderAndRequest(req != nil, "chat request is required"); err != nil {
@@ -46,12 +62,14 @@ func (o *InferenceOrchestrator) StreamChatCompletion(ctx context.Context, workfl
 	if err != nil {
 		return nil, err
 	}
+	repetitionLimit, repetitionMaxPattern := o.resolveEffectiveRepetition(workflow)
 	return &StreamResult{
-		Stream:            stream,
-		slowdownFactor:    workflowSlowdown(workflow),
-		inferenceStarted:  started,
-		repetitionLimit:   o.streamRepetitionLimit,
-		Meta:              meta,
+		Stream:               stream,
+		slowdownFactor:       workflowSlowdown(workflow),
+		inferenceStarted:     started,
+		repetitionLimit:      repetitionLimit,
+		repetitionMaxPattern: repetitionMaxPattern,
+		Meta:                 meta,
 	}, nil
 }
 
@@ -93,12 +111,14 @@ func (o *InferenceOrchestrator) StreamResponses(ctx context.Context, workflow *c
 	if err != nil {
 		return nil, err
 	}
+	repetitionLimit, repetitionMaxPattern := o.resolveEffectiveRepetition(workflow)
 	return &StreamResult{
-		Stream:            stream,
-		slowdownFactor:    workflowSlowdown(workflow),
-		inferenceStarted:  started,
-		repetitionLimit:   o.streamRepetitionLimit,
-		Meta:              meta,
+		Stream:               stream,
+		slowdownFactor:       workflowSlowdown(workflow),
+		inferenceStarted:     started,
+		repetitionLimit:      repetitionLimit,
+		repetitionMaxPattern: repetitionMaxPattern,
+		Meta:                 meta,
 	}, nil
 }
 
