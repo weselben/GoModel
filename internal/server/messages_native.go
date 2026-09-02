@@ -118,7 +118,7 @@ func (s *translatedInferenceService) dispatchMessagesNative(c *echo.Context, req
 			providerName: providerName,
 		})
 	}
-	return proxyPassthroughResponse(c, s.logger, s.usageLogger, s.pricingResolver, anthropicProviderType, providerName, "messages", info, resp, extraObservers...)
+	return proxyPassthroughResponse(c, s.logger, s.usageLogger, s.pricingResolver, anthropicProviderType, providerName, "messages", info, resp, s.streamRepetitionLimit, s.streamRepetitionMaxPattern, extraObservers...)
 }
 
 // rewriteMessagesModel returns body with its top-level "model" value replaced

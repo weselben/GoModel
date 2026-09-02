@@ -58,6 +58,7 @@ type Handler struct {
 	cacheProbe                   ReadinessProbe
 	versionChecker               *versioncheck.Checker
 	streamRepetitionLimit        int
+	streamRepetitionMaxPattern   int
 
 	translatedSvc     *translatedInferenceService // snapshot of handler fields at first use; server.New sets cache/hash before traffic
 	translatedSvcOnce sync.Once
@@ -149,22 +150,23 @@ func (h *Handler) SetConversationStore(store conversationstore.Store) {
 func (h *Handler) translatedInference() *translatedInferenceService {
 	h.translatedSvcOnce.Do(func() {
 		s := &translatedInferenceService{
-			provider:                 h.provider,
-			modelResolver:            h.modelResolver,
-			modelAuthorizer:          h.modelAuthorizer,
-			workflowPolicyResolver:   h.workflowPolicyResolver,
-			failoverResolver:         h.failoverResolver,
-			failoverPolicy:           h.failoverPolicy,
-			translatedRequestPatcher: h.translatedRequestPatcher,
-			logger:                   h.logger,
-			usageLogger:              h.usageLogger,
-			budgetChecker:            h.budgetChecker,
-			rateLimiter:              h.rateLimiter,
-			pricingResolver:          h.pricingResolver,
-			responseCache:            h.responseCache,
-			guardrailsHash:           h.guardrailsHash,
-			responseStore:            h.currentResponseStore(),
-			streamRepetitionLimit:    h.streamRepetitionLimit,
+			provider:                   h.provider,
+			modelResolver:              h.modelResolver,
+			modelAuthorizer:            h.modelAuthorizer,
+			workflowPolicyResolver:     h.workflowPolicyResolver,
+			failoverResolver:           h.failoverResolver,
+			failoverPolicy:             h.failoverPolicy,
+			translatedRequestPatcher:   h.translatedRequestPatcher,
+			logger:                     h.logger,
+			usageLogger:                h.usageLogger,
+			budgetChecker:              h.budgetChecker,
+			rateLimiter:                h.rateLimiter,
+			pricingResolver:            h.pricingResolver,
+			responseCache:              h.responseCache,
+			guardrailsHash:             h.guardrailsHash,
+			responseStore:              h.currentResponseStore(),
+			streamRepetitionLimit:      h.streamRepetitionLimit,
+			streamRepetitionMaxPattern: h.streamRepetitionMaxPattern,
 		}
 		s.initHandlers()
 		h.storesMu.Lock()
@@ -308,5 +310,7 @@ func (h *Handler) passthrough() *passthroughService {
 		pricingResolver:              h.pricingResolver,
 		normalizePassthroughV1Prefix: h.normalizePassthroughV1Prefix,
 		enabledPassthroughProviders:  h.enabledPassthroughProviders,
+		streamRepetitionLimit:        h.streamRepetitionLimit,
+		streamRepetitionMaxPattern:   h.streamRepetitionMaxPattern,
 	}
 }

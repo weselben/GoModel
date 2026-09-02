@@ -52,10 +52,11 @@ type translatedInferenceService struct {
 	// can drain them before closing the response store. snapshotMu gates new
 	// writes against the drain: a handler that outlives the HTTP drain window
 	// must not register a write after drainSnapshotWrites has begun waiting.
-	snapshotWrites   sync.WaitGroup
-	snapshotMu       sync.RWMutex
-	snapshotDraining bool
-	streamRepetitionLimit int
+	snapshotWrites             sync.WaitGroup
+	snapshotMu                 sync.RWMutex
+	snapshotDraining           bool
+	streamRepetitionLimit      int
+	streamRepetitionMaxPattern int
 
 	orchestrator *gateway.InferenceOrchestrator
 
@@ -75,17 +76,18 @@ func (s *translatedInferenceService) inference() *gateway.InferenceOrchestrator 
 
 func (s *translatedInferenceService) newInferenceOrchestrator() *gateway.InferenceOrchestrator {
 	cfg := gateway.InferenceConfig{
-		Provider:                 s.provider,
-		ModelResolver:            s.modelResolver,
-		ModelAuthorizer:          s.modelAuthorizer,
-		WorkflowPolicyResolver:   s.workflowPolicyResolver,
-		FailoverResolver:         s.failoverResolver,
-		FailoverPolicy:           s.failoverPolicy,
-		TranslatedRequestPatcher: s.translatedRequestPatcher,
-		UsageLogger:              s.usageLogger,
-		PricingResolver:          s.pricingResolver,
-		GuardrailsHash:           s.guardrailsHash,
-		StreamRepetitionLimit:    s.streamRepetitionLimit,
+		Provider:                   s.provider,
+		ModelResolver:              s.modelResolver,
+		ModelAuthorizer:            s.modelAuthorizer,
+		WorkflowPolicyResolver:     s.workflowPolicyResolver,
+		FailoverResolver:           s.failoverResolver,
+		FailoverPolicy:             s.failoverPolicy,
+		TranslatedRequestPatcher:   s.translatedRequestPatcher,
+		UsageLogger:                s.usageLogger,
+		PricingResolver:            s.pricingResolver,
+		GuardrailsHash:             s.guardrailsHash,
+		StreamRepetitionLimit:      s.streamRepetitionLimit,
+		StreamRepetitionMaxPattern: s.streamRepetitionMaxPattern,
 	}
 	// Guarded assignment keeps the gate nil when rate limits are off (a nil
 	// RateLimiter assigned unconditionally would arrive as a typed non-nil
