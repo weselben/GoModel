@@ -306,6 +306,9 @@ resilience:
   # consecutively. The upstream request is cancelled, the repeated tail is
   # stripped, and the client receives a clean [DONE]. 0 disables the guard.
   stream_repetition_limit: 0
+  # Maximum chain length in tokens the guard treats as one repeating unit.
+  # 0 selects the built-in default (8).
+  stream_repetition_max_pattern: 8
   retry:
     max_retries: 3
     initial_backoff: 1s

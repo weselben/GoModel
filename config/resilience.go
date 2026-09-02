@@ -52,6 +52,10 @@ type ResilienceConfig struct {
 	// StreamRepetitionLimit aborts a chat SSE stream when the same text unit
 	// repeats this many times consecutively. 0 (default) disables the guard.
 	StreamRepetitionLimit int `yaml:"stream_repetition_limit" env:"STREAM_REPETITION_LIMIT"`
+	// StreamRepetitionMaxPattern is the maximum chain length in tokens that
+	// the repetition guard considers as one repeating unit. 0 selects the
+	// built-in default (8).
+	StreamRepetitionMaxPattern int `yaml:"stream_repetition_max_pattern" env:"STREAM_REPETITION_MAX_PATTERN"`
 }
 
 // RawResilienceConfig holds optional per-provider resilience overrides from YAML.
