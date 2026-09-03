@@ -472,3 +472,618 @@ func TestClampGuardParams(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// WithTriggerCallback coverage
+// ---------------------------------------------------------------------------
+
+func TestRepetitionGuardStream_TriggerCallbackFiresOnce(t *testing.T) {
+	callbackCount := 0
+	opts := []GuardOption{WithTriggerCallback(func() { callbackCount++ })}
+
+	limit := 3
+	input := chatEvent("x") + chatEvent("a") + chatEvent("a") + chatEvent("a") + doneEvent()
+	src := newSource(input)
+	stream := NewRepetitionGuardStream(src, limit, 8, "gpt-4o", opts...)
+	if stream == src {
+		t.Fatal("expected wrapper with WithTriggerCallback, got original source")
+	}
+
+	_, err := io.ReadAll(stream)
+	if err != nil {
+		t.Fatalf("ReadAll error: %v", err)
+	}
+	if callbackCount != 1 {
+		t.Fatalf("callbackCount = %d, want 1", callbackCount)
+	}
+	if src.closeCount != 1 {
+		t.Fatalf("expected source closed once, got %d", src.closeCount)
+	}
+}
+
+func TestRepetitionGuardStream_NoTriggerCallbackNoFire(t *testing.T) {
+	callbackCount := 0
+	opts := []GuardOption{WithTriggerCallback(func() { callbackCount++ })}
+
+	input := chatEvent("the ") + chatEvent("quick ") + chatEvent("brown ") + doneEvent()
+	src := newSource(input)
+	stream := NewRepetitionGuardStream(src, 3, 8, "gpt-4o", opts...)
+	if stream == src {
+		t.Fatal("expected wrapper, got original source")
+	}
+
+	_, err := io.ReadAll(stream)
+	if err != nil {
+		t.Fatalf("ReadAll error: %v", err)
+	}
+	if callbackCount != 0 {
+		t.Fatalf("callback fired on clean stream, count = %d", callbackCount)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error: %v", err)
+	}
+	if src.closeCount != 1 {
+		t.Fatalf("expected one source close, got %d", src.closeCount)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// NewRepetitionGuardStream — nil source / disabled path coverage
+// ---------------------------------------------------------------------------
+
+func TestNewRepetitionGuardStream_NilSourceReturnsSource(t *testing.T) {
+	var src io.ReadCloser = nil
+	stream := NewRepetitionGuardStream(src, 3, 8, "gpt-4o")
+	if stream != nil {
+		t.Fatalf("expected nil for nil source, got %v", stream)
+	}
+}
+
+func TestNewRepetitionGuardStream_DisabledPathNoOpts(t *testing.T) {
+	src := newSource(chatEvent("hello"))
+	stream := NewRepetitionGuardStream(src, 0, 8, "gpt-4o")
+	if stream != src {
+		t.Fatal("expected original source for limit=0")
+	}
+	stream = NewRepetitionGuardStream(src, -1, 8, "gpt-4o")
+	if stream != src {
+		t.Fatal("expected original source for limit=-1")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// newGuardWithCounter — nil source / disabled path coverage
+// ---------------------------------------------------------------------------
+
+func TestNewGuardWithCounter_NilSourceReturnsSource(t *testing.T) {
+	var src io.ReadCloser = nil
+	stream := newGuardWithCounter(src, 3, 8, nil)
+	if stream != nil {
+		t.Fatalf("expected nil for nil source, got %v", stream)
+	}
+}
+
+func TestNewGuardWithCounter_DisabledPath(t *testing.T) {
+	src := newSource(chatEvent("hello"))
+	stream := newGuardWithCounter(src, 0, 8, nil)
+	if stream != src {
+		t.Fatal("expected original source for limit=0")
+	}
+	stream = newGuardWithCounter(src, -5, 8, nil)
+	if stream != src {
+		t.Fatal("expected original source for limit=-5")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Read — missing branches
+// ---------------------------------------------------------------------------
+
+func TestRepetitionGuardStream_Read_EmptyBuffer(t *testing.T) {
+	stream := newGuardWithCounter(newSource(chatEvent("x")), 3, 8, nil)
+	n, err := stream.Read(nil)
+	if n != 0 || err != nil {
+		t.Fatalf("Read(nil) = (%d, %v), want (0, nil)", n, err)
+	}
+}
+
+func TestRepetitionGuardStream_Read_SourceErrorPropagated(t *testing.T) {
+	err := io.ErrNoProgress
+	// Use a reader that returns err on first Read.
+	srcReader := &errOnFirstRead{Reader: strings.NewReader(""), err: err}
+	src := &recordingReadCloser{Reader: srcReader}
+	stream := newGuardWithCounter(src, 3, 8, nil)
+	_, errRead := io.ReadAll(stream)
+	if errRead != err {
+		t.Fatalf("expected error %v, got %v", err, errRead)
+	}
+}
+
+// errOnFirstRead returns the given err on the first Read, then EOF.
+type errOnFirstRead struct {
+	io.Reader
+	err  error
+	done bool
+}
+
+func (r *errOnFirstRead) Read(p []byte) (int, error) {
+	if !r.done {
+		r.done = true
+		return 0, r.err
+	}
+	return r.Reader.Read(p)
+}
+
+func TestRepetitionGuardStream_Read_TriggeredReturnsEOF(t *testing.T) {
+	// Force the guard into triggered state without reading the whole stream.
+	payload := periodicRunPayload(3)
+	input := chatEvent(payload) + doneEvent()
+	src := newSource(input)
+	stream := newGuardWithCounter(src, 3, 8, nil)
+
+	// Drain to trigger.
+	_, err := io.ReadAll(stream)
+	if err != nil {
+		t.Fatalf("ReadAll error: %v", err)
+	}
+
+	// Next read should return EOF.
+	buf := make([]byte, 8)
+	n, err := stream.Read(buf)
+	if n != 0 || err != io.EOF {
+		t.Fatalf("Read after trigger = (%d, %v), want (0, io.EOF)", n, err)
+	}
+}
+
+func TestRepetitionGuardStream_Read_AfterCloseReturnsEOF(t *testing.T) {
+	payload := periodicRunPayload(3)
+	input := chatEvent(payload) + doneEvent()
+	src := newSource(input)
+	stream := newGuardWithCounter(src, 3, 8, nil)
+
+	_, err := io.ReadAll(stream)
+	if err != nil {
+		t.Fatalf("ReadAll error: %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close error: %v", err)
+	}
+
+	buf := make([]byte, 8)
+	n, err := stream.Read(buf)
+	if n != 0 || err != io.EOF {
+		t.Fatalf("Read after Close = (%d, %v), want (0, io.EOF)", n, err)
+	}
+}
+
+func TestRepetitionGuardStream_Read_SourceAlreadyDone(t *testing.T) {
+	// Source returns EOF on first read with n==0.
+	src := &recordingReadCloser{Reader: strings.NewReader("")}
+	stream := newGuardWithCounter(src, 3, 8, nil)
+	n, err := stream.Read(make([]byte, 8))
+	if n != 0 || err != io.EOF {
+		t.Fatalf("Read on empty source = (%d, %v), want (0, io.EOF)", n, err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// observe — runaway event, empty events, multi-events
+// ---------------------------------------------------------------------------
+
+func TestRepetitionGuardStream_Observe_RunawayEvent(t *testing.T) {
+	// Build a single event whose data payload exceeds maxPendingEventBytes (16 KB).
+	large := strings.Repeat("a", maxPendingEventBytes+1024)
+	// Wrap in an SSE event (data: ...\n\n).
+	event := "data: \"" + escapeJSONString(large) + "\"\n\n"
+	src := newSource(event)
+	stream := newGuardWithCounter(src, 3, 8, nil)
+	out, err := io.ReadAll(stream)
+	if err != nil {
+		t.Fatalf("ReadAll error: %v", err)
+	}
+	// The runaway event should be forwarded unchanged (no trigger, the content
+	// is just repeated 'a' but the guard emits it without inspecting since no
+	// event boundary was found until it was flushed).
+	if !bytes.Contains(out, []byte(large)) {
+		t.Fatalf("runaway event not forwarded, got: %q", string(out))
+	}
+}
+
+func escapeJSONString(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range s {
+		switch r {
+		case '"', '\\':
+			b.WriteByte('\\')
+			b.WriteByte(byte(r))
+		default:
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
+}
+
+func TestRepetitionGuardStream_Observe_EmptyEventSkipped(t *testing.T) {
+	// Two valid events separated by a blank line (empty event boundary).
+	input := chatEvent("hello") + "\n\n" + chatEvent("world") + doneEvent()
+	src := newSource(input)
+	stream := newGuardWithCounter(src, 3, 8, nil)
+	out, err := io.ReadAll(stream)
+	if err != nil {
+		t.Fatalf("ReadAll error: %v", err)
+	}
+	// Both events should pass through.
+	if !bytes.Contains(out, []byte("hello")) || !bytes.Contains(out, []byte("world")) {
+		t.Fatalf("expected both events, got: %q", string(out))
+	}
+}
+
+func TestRepetitionGuardStream_Observe_MultipleEventsInOneChunk(t *testing.T) {
+	// Two SSE events packed back-to-back in a single source Read.
+	input := chatEvent("a") + chatEvent("b") + doneEvent()
+	src := newSource(input)
+	stream := newGuardWithCounter(src, 3, 8, nil)
+	out, err := io.ReadAll(stream)
+	if err != nil {
+		t.Fatalf("ReadAll error: %v", err)
+	}
+	want := input
+	if string(out) != want {
+		t.Fatalf("multi-event mismatch\nwant: %q\ngot:  %q", want, string(out))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// eventPayload — multi-line, comments, non-data events
+// ---------------------------------------------------------------------------
+
+func TestEventPayload_MultiLineEvent(t *testing.T) {
+	// Two data: lines joined with \n.
+	event := "data: hello\n" +
+		"data: world\n\n"
+	got := eventPayload([]byte(event))
+	want := []byte("hello\nworld")
+	if !bytes.Equal(got, want) {
+		t.Fatalf("multi-line event payload\nwant: %q\ngot:  %q", want, got)
+	}
+}
+
+func TestEventPayload_CommentOnlyReturnsNil(t *testing.T) {
+	event := ": comment line\n\n"
+	got := eventPayload([]byte(event))
+	if got != nil {
+		t.Fatalf("comment-only event payload = %q, want nil", got)
+	}
+}
+
+func TestEventPayload_SingleLineNonDataEventReturnsNil(t *testing.T) {
+	event := ": just a comment\n\n"
+	got := eventPayload([]byte(event))
+	if got != nil {
+		t.Fatalf("single-line comment payload = %q, want nil", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// inspectEvent — non-JSON payload, [DONE], missing choices
+// ---------------------------------------------------------------------------
+
+func TestRepetitionGuardStream_InspectEvent_NonJSONPayload(t *testing.T) {
+	event := "data: not-json\n\n"
+	src := newSource(event)
+	stream := newGuardWithCounter(src, 3, 8, nil)
+	out, err := io.ReadAll(stream)
+	if err != nil {
+		t.Fatalf("ReadAll error: %v", err)
+	}
+	// Non-JSON should pass through unchanged.
+	if !bytes.Contains(out, []byte("not-json")) {
+		t.Fatalf("expected non-JSON passed through, got: %q", string(out))
+	}
+}
+
+func TestRepetitionGuardStream_InspectEvent_MalformedJSON(t *testing.T) {
+	event := "data: {broken json\n\n"
+	src := newSource(event)
+	stream := newGuardWithCounter(src, 3, 8, nil)
+	out, err := io.ReadAll(stream)
+	if err != nil {
+		t.Fatalf("ReadAll error: %v", err)
+	}
+	if !bytes.Contains(out, []byte("broken json")) {
+		t.Fatalf("expected malformed JSON passed through, got: %q", string(out))
+	}
+}
+
+func TestRepetitionGuardStream_InspectEvent_NoChoicesKey(t *testing.T) {
+	event := "data: {\"message\":\"hello\"}\n\n"
+	src := newSource(event)
+	stream := newGuardWithCounter(src, 3, 8, nil)
+	out, err := io.ReadAll(stream)
+	if err != nil {
+		t.Fatalf("ReadAll error: %v", err)
+	}
+	if !bytes.Contains(out, []byte("hello")) {
+		t.Fatalf("expected no-choices payload passed through, got: %q", string(out))
+	}
+}
+
+func TestRepetitionGuardStream_InspectEvent_ChoicesNotArray(t *testing.T) {
+	event := "data: {\"choices\":\"string\"}\n\n"
+	src := newSource(event)
+	stream := newGuardWithCounter(src, 3, 8, nil)
+	out, err := io.ReadAll(stream)
+	if err != nil {
+		t.Fatalf("ReadAll error: %v", err)
+	}
+	if !bytes.Contains(out, []byte("choices")) {
+		t.Fatalf("expected choices-string passed through, got: %q", string(out))
+	}
+}
+
+func TestRepetitionGuardStream_InspectEvent_ChoicesArrayWithNonMap(t *testing.T) {
+	event := "data: {\"choices\":[\"not-a-map\"]}\n\n"
+	src := newSource(event)
+	stream := newGuardWithCounter(src, 3, 8, nil)
+	out, err := io.ReadAll(stream)
+	if err != nil {
+		t.Fatalf("ReadAll error: %v", err)
+	}
+	if !bytes.Contains(out, []byte("not-a-map")) {
+		t.Fatalf("expected choices-non-map passed through, got: %q", string(out))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// trigger — double-call no-op (observable via Close count)
+// ---------------------------------------------------------------------------
+
+func TestRepetitionGuardStream_TriggerDoubleCallNoOp(t *testing.T) {
+	callbackCount := 0
+	opts := []GuardOption{WithTriggerCallback(func() { callbackCount++ })}
+
+	payload := periodicRunPayload(3)
+	input := chatEvent(payload) + doneEvent()
+	src := newSource(input)
+	stream := NewRepetitionGuardStream(src, 3, 8, "gpt-4o", opts...)
+
+	// First trigger via ReadAll.
+	_, err := io.ReadAll(stream)
+	if err != nil {
+		t.Fatalf("ReadAll error: %v", err)
+	}
+	if callbackCount != 1 {
+		t.Fatalf("first trigger: callbackCount = %d, want 1", callbackCount)
+	}
+	firstClose := src.closeCount
+
+	// Calling trigger again (e.g. via a second Close) must be a no-op.
+	_ = stream.Close() // first Close calls closeSource
+	_ = stream.Close() // second Close must not double-close
+	if src.closeCount != firstClose {
+		t.Fatalf("Close doubled source close: first=%d second=%d",
+			firstClose, src.closeCount)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// detectTokenRun — tail capacity trimming
+// ---------------------------------------------------------------------------
+
+func TestRepetitionGuardStream_DetectTokenRun_TailTrimming(t *testing.T) {
+	// Use a counter that maps "x" → {1}. limit=3, maxPattern=8 → capacity=24.
+	// Push 100 tokens so the tail is trimmed, then continue to exercise the
+	// trim-on-each-iteration path.
+	counter := newTestCounter{"x": {1}}
+	// Force inspection by feeding a repeating pattern that triggers.
+	payload := strings.Repeat(chatEvent("x"), 50)
+	input := payload + doneEvent()
+	src2 := newSource(input)
+	stream2 := newGuardWithCounter(src2, 3, 8, counter)
+	// The tail is trimmed each iteration; the guard should still detect the run.
+	_, err := io.ReadAll(stream2)
+	if err != nil {
+		t.Fatalf("ReadAll error: %v", err)
+	}
+	if src2.closeCount != 1 {
+		t.Fatalf("expected trigger after trimming, got closeCount=%d", src2.closeCount)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// byteTailRepeats — n < need early return
+// ---------------------------------------------------------------------------
+
+func TestByteTailRepeats_NeedTooLarge(t *testing.T) {
+	tail := []byte{1, 2, 3}
+	// need=9 > len(tail)=3 → n < need → false
+	if byteTailRepeats(tail, 1, 9) {
+		t.Fatal("expected false when need > len(tail)")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// byteRunLength — n < p path (called indirectly via detectRun)
+// ---------------------------------------------------------------------------
+
+func TestByteRunLength_ShortTail(t *testing.T) {
+	// tail is 2 bytes, period is 3 → n < p → returns 0
+	if got := byteRunLength([]byte("ab"), 3); got != 0 {
+		t.Fatalf("byteRunLength([\"ab\"], 3) = %d, want 0", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// contentDeltas — missing/invalid delta fields
+// ---------------------------------------------------------------------------
+
+func TestRepetitionGuardStream_ContentDeltas_MissingDelta(t *testing.T) {
+	event := "data: {\"choices\":[{} ]}\n\n"
+	src := newSource(event)
+	stream := newGuardWithCounter(src, 3, 8, nil)
+	_, err := io.ReadAll(stream)
+	if err != nil {
+		t.Fatalf("ReadAll error: %v", err)
+	}
+}
+
+func TestRepetitionGuardStream_ContentDeltas_DeltaNotMap(t *testing.T) {
+	event := "data: {\"choices\":[{\"delta\":\"string\"}]}\n\n"
+	src := newSource(event)
+	stream := newGuardWithCounter(src, 3, 8, nil)
+	_, err := io.ReadAll(stream)
+	if err != nil {
+		t.Fatalf("ReadAll error: %v", err)
+	}
+}
+
+func TestRepetitionGuardStream_ContentDeltas_ToolCallsSkipped(t *testing.T) {
+	event := toolCallEvent("bigpayload")
+	src := newSource(event)
+	stream := newGuardWithCounter(src, 3, 8, nil)
+	_, err := io.ReadAll(stream)
+	if err != nil {
+		t.Fatalf("ReadAll error: %v", err)
+	}
+	if src.closeCount != 0 {
+		t.Fatalf("tool_calls should not trigger, closeCount=%d", src.closeCount)
+	}
+}
+
+func TestRepetitionGuardStream_ContentDeltas_FunctionCallSkipped(t *testing.T) {
+	event := functionCallEvent("bigpayload")
+	src := newSource(event)
+	stream := newGuardWithCounter(src, 3, 8, nil)
+	_, err := io.ReadAll(stream)
+	if err != nil {
+		t.Fatalf("ReadAll error: %v", err)
+	}
+	if src.closeCount != 0 {
+		t.Fatalf("function_call should not trigger, closeCount=%d", src.closeCount)
+	}
+}
+
+func TestRepetitionGuardStream_ContentDeltas_ContentNonString(t *testing.T) {
+	event := "data: {\"choices\":[{\"delta\":{\"content\":123}}]}\n\n"
+	src := newSource(event)
+	stream := newGuardWithCounter(src, 3, 8, nil)
+	_, err := io.ReadAll(stream)
+	if err != nil {
+		t.Fatalf("ReadAll error: %v", err)
+	}
+}
+
+func TestRepetitionGuardStream_ContentDeltas_ContentEmptyString(t *testing.T) {
+	event := "data: {\"choices\":[{\"delta\":{\"content\":\"\"}}]}\n\n"
+	src := newSource(event)
+	stream := newGuardWithCounter(src, 3, 8, nil)
+	_, err := io.ReadAll(stream)
+	if err != nil {
+		t.Fatalf("ReadAll error: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// looksLikeEncodedBlob — density < 0.85 false path
+// ---------------------------------------------------------------------------
+
+func TestLooksLikeEncodedBlob_LowDensity(t *testing.T) {
+	// 64 bytes with only a few encoded symbols mixed in → density < 0.85.
+	// isEncodedSymbol returns true for a-z, A-Z, 0-9, so "abcdefghijklmnop"
+	// is all encoded symbols → density = 1.0. Need to include non-symbols.
+	mixed := "abcdefghijklmnop" + " .!?;" // space, period, exclaim, question are NOT encoded symbols
+	window := mixed
+	for len(window) < encodedWindowBytes {
+		window += mixed
+	}
+	window = window[:encodedWindowBytes]
+	if looksLikeEncodedBlob([]byte(window)) {
+		t.Fatalf("expected false for low-density window, got true")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// looksLikeEncodedBlob — density ≥ 0.85 AND entropy ≥ 4.5 false path
+// ---------------------------------------------------------------------------
+
+func TestLooksLikeEncodedBlob_HighEntropyAlnum(t *testing.T) {
+	// All alphanumeric → density=1.0, but Shannon entropy ≥ 4.5 bits/char.
+	// A 64-byte string with near-uniform distribution over 62 alnum chars.
+	// Use the already-tested highEntropyUnit repeated.
+	unit := "abcdefghijklmnopqrstuvwxyz012345" // 32 chars
+	blob := unit + unit // 64 bytes, density=1.0, entropy ~4.9
+	if looksLikeEncodedBlob([]byte(blob)) {
+		t.Fatalf("expected false for high-entropy alnum, got true")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// isEncodedSymbol — symbol branches
+// ---------------------------------------------------------------------------
+
+func TestIsEncodedSymbol_SymbolBranches(t *testing.T) {
+	cases := []struct {
+		b    byte
+		want bool
+	}{
+		{'+', true},
+		{'/', true},
+		{'-', true},
+		{'_', true},
+		{'=', true},
+	}
+	for _, tc := range cases {
+		if got := isEncodedSymbol(tc.b); got != tc.want {
+			t.Fatalf("isEncodedSymbol(%q) = %v, want %v", tc.b, got, tc.want)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// detectTokenRun — n < need early break (not enough tokens)
+// ---------------------------------------------------------------------------
+
+// nonRepeatingCounter returns unique IDs per call to avoid false triggers.
+type nonRepeatingCounter struct {
+	next int
+}
+
+func (c *nonRepeatingCounter) Tokens(text string) []int {
+	c.next++
+	return []int{c.next}
+}
+
+func TestDetectTokenRun_NeedTooLarge(t *testing.T) {
+	// Append 4 times → 4 tokens. period=4, limit=3 → need=12.
+	// Tail < need so the loop breaks early.
+	counter := &nonRepeatingCounter{}
+	payload := ""
+	for i := 0; i < 4; i++ {
+		payload += chatEvent("test")
+	}
+	payload += doneEvent()
+	src2 := newSource(payload)
+	stream2 := newGuardWithCounter(src2, 3, 4, counter)
+	_, err := io.ReadAll(stream2)
+	if err != nil {
+		t.Fatalf("ReadAll error: %v", err)
+	}
+	if src2.closeCount != 0 {
+		t.Fatalf("expected no trigger with insufficient tokens, got %d", src2.closeCount)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// detectByteRun — runLength < need false path
+// ---------------------------------------------------------------------------
+
+func TestDetectByteRun_RunLengthBelowNeed(t *testing.T) {
+	// tail = "xyxyx" (5 bytes, period 2, 2.5 copies) → periodic suffix run = 5.
+	// need for p=2, limit=3 → need=6. runLength=5 < 6 → false.
+	// Use detectRun directly for precision.
+	if got := detectRun([]byte("xyxyx"), 3); got {
+		t.Fatalf("detectRun(\"xyxyx\", 3) = true, want false (runLength 5 < need 6)")
+	}
+}

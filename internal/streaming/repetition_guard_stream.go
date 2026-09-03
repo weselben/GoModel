@@ -163,7 +163,6 @@ func (s *RepetitionGuardStream) Read(p []byte) (int, error) {
 				if n == 0 {
 					return 0, io.EOF
 				}
-				continue
 			}
 			s.readErr = err
 			s.sourceDone = true
