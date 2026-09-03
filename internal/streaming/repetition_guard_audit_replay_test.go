@@ -15,6 +15,14 @@ package streaming
 // loop-phrase shapes are generic. Loop phrases are representative stutters
 // a coding model emits; they are not copies of the captured content.
 //
+// End-of-turn contract: when the guard triggers it appends
+// `data: [DONE]\n\n` — byte-identical to the OpenAI chat-completions
+// terminator a clean upstream would emit. Any OpenAI-compatible SSE
+// consumer therefore sees a normal end-of-stream and proceeds without
+// intervention. There is no `finish_reason` distinguishing a guard
+// truncation from a natural completion; this is intentional, so that the
+// cancellation is indistinguishable from a normal answer ending.
+//
 // Groups:
 //
 //	A. Normal traffic  — guard ON, stream completes, output byte-identical,
