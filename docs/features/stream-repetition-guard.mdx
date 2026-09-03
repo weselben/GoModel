@@ -1,0 +1,92 @@
+---
+title: "Stream repetition guard"
+description: "Cancel an upstream request and end the stream cleanly when a model starts repeating itself during streaming."
+icon: "rotate-ccw"
+keywords: ["repetition", "loop", "streaming", "guard", "STREAM_REPETITION_LIMIT"]
+---
+
+## Overview
+
+Large language models can fall into a repetition loop: the same token or
+phrase repeats hundreds of times. This wastes tokens and fills the client
+context with junk. The **stream repetition guard** watches every streaming
+response, detects the loop, and stops it.
+
+When the guard triggers:
+
+1. The upstream request is cancelled. No more tokens are consumed.
+2. The stream to the client ends with a normal `data: [DONE]` frame, so the
+   client sees a clean finish, not a broken connection.
+3. A `slog.Warn` line and the Prometheus counter
+   `gomodel_stream_repetition_triggers_total{provider, model}` record the
+   event.
+
+The guard is **off by default**. Set the threshold to turn it on.
+
+## How detection works
+
+The guard decodes the delta content of each streaming event and tokenizes it
+with the model's vocabulary. It keeps a rolling tail of recent tokens and
+checks whether the last `limit` copies of any repeating unit — a single
+token or a chain of up to `max_pattern` tokens — sit at the end of that
+tail. Unknown model names fall back to a byte-period detector.
+
+Legitimate repetition is not a loop. The guard never inspects:
+
+- code inside fenced code blocks (```),
+- markdown table rows,
+- runs of more than 7 whitespace characters,
+- base64/hex-looking blobs (checked by symbol density and entropy),
+- `tool_calls` and `function_call` deltas.
+
+## Turn it on
+
+Environment variable:
+
+```bash
+STREAM_REPETITION_LIMIT=4
+```
+
+or in `config.yaml`:
+
+```yaml
+resilience:
+  stream_repetition_limit: 4
+```
+
+The number is the count of consecutive repeats that trips the guard. 0, an
+empty value, or an unset variable keeps the guard off and adds no overhead.
+
+Two more knobs shape the detection window:
+
+| Setting | Env | Default | Meaning |
+| --- | --- | --- | --- |
+| `stream_repetition_limit` | `STREAM_REPETITION_LIMIT` | 0 (off) | consecutive repeats that abort the stream |
+| `stream_repetition_max_pattern` | `STREAM_REPETITION_MAX_PATTERN` | 8 | longest token chain treated as one repeating unit |
+
+## Per-model override
+
+Set the limit per virtual model in the dashboard **Models** view, next to
+the slowdown setting, or in `config.yaml`:
+
+```yaml
+virtual_models:
+  - source: chat
+    target_model: openai/gpt-4o
+    repetition_limit: 4
+    repetition_max_pattern: 8
+```
+
+- unset fields inherit the global default;
+- `repetition_limit: 0` disables the guard for that model, even when a
+  global limit is set.
+
+## Observability
+
+Each trigger logs a warning and increments one counter:
+
+```
+gomodel_stream_repetition_triggers_total{provider="openai", model="gpt-4o"}
+```
+
+Use it to alert on models that loop often.

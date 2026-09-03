@@ -103,7 +103,8 @@
                             "features/cost-tracking",
                             "features/labelling",
                             "features/cache",
-                            "features/failover"
+                            "features/failover",
+                            "features/stream-repetition-guard"
                         ]
                     },
                     {
