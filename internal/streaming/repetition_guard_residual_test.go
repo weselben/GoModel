@@ -175,7 +175,7 @@ func TestDetectByteRun_HighLimitUsesMaxNeed(t *testing.T) {
 	limit := 4
 	payload := periodicRunPayload(4) // 128 bytes, period 32
 	input := chatEventRaw("start") + chatEventRaw(payload) + chatEventRaw(payload) + chatEventRaw(payload)
-	want := chatEventRaw("start") + chatEventRaw(payload) + doneEvent()
+	want := chatEventRaw("start") + chatEventRaw(payload) + stopEvent(0) + doneEvent()
 
 	src := newSource(input)
 	stream := newGuardWithCounter(src, limit, 8, nil) // nil counter -> byte fallback
@@ -219,7 +219,7 @@ func TestNewTokenCounter_ForEncodingError(t *testing.T) {
 	// triggers on the first payload event.
 	payload := periodicRunPayload(4)
 	input := chatEventRaw("start") + chatEventRaw(payload) + chatEventRaw(payload) + chatEventRaw(payload)
-	want := chatEventRaw("start") + chatEventRaw(payload) + doneEvent()
+	want := chatEventRaw("start") + chatEventRaw(payload) + stopEvent(0) + doneEvent()
 	src := newSource(input)
 	stream := NewRepetitionGuardStream(src, 3, 8, fakeModel)
 	out, err := io.ReadAll(stream)

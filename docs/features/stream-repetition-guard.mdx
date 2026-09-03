@@ -15,8 +15,14 @@ response, detects the loop, and stops it.
 When the guard triggers:
 
 1. The upstream request is cancelled. No more tokens are consumed.
-2. The stream to the client ends with a normal `data: [DONE]` frame, so the
-   client sees a clean finish, not a broken connection.
+2. The client sees a normal turn end, so the calling harness continues
+   without human interaction:
+   - Chat completions: a synthetic terminal chunk with
+     `finish_reason: "stop"`, then `data: [DONE]`.
+   - Anthropic `/v1/messages`: `message_delta` with `stop_reason: "end_turn"`,
+     then `message_stop`. No `[DONE]` marker.
+   - OpenAI Responses API: a `response.completed` event with
+     `status: "completed"`. No `[DONE]` marker.
 3. A `slog.Warn` line and the Prometheus counter
    `gomodel_stream_repetition_triggers_total{provider, model}` record the
    event.

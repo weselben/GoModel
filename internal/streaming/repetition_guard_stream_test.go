@@ -3,6 +3,7 @@ package streaming
 import (
 	"bytes"
 	"io"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -34,6 +35,14 @@ func chatEvent(content string) string {
 
 func doneEvent() string {
 	return "data: [DONE]\n\n"
+}
+
+// stopEvent is the synthetic terminal chunk the guard appends on trigger
+// before [DONE]. Test payloads carry no envelope (id/object/created/model),
+// so the chunk is the minimal choices-only shape the guard emits for
+// envelope-less streams.
+func stopEvent(index int) string {
+	return `data: {"choices":[{"delta":{},"finish_reason":"stop","index":` + strconv.Itoa(index) + "}]}\n\n"
 }
 
 // highEntropyUnit is a 32-char alnum unit (~5.0 bits/char entropy) whose
@@ -90,7 +99,7 @@ func TestRepetitionGuardStream_TokenStutter(t *testing.T) {
 	// limit=3, single token 'a'. Accepted leak = 3 copies (no holdback).
 	limit := 3
 	input := chatEvent("x") + chatEvent("a") + chatEvent("a") + chatEvent("a") + doneEvent()
-	want := chatEvent("x") + chatEvent("a") + chatEvent("a") + chatEvent("a") + doneEvent()
+	want := chatEvent("x") + chatEvent("a") + chatEvent("a") + chatEvent("a") + stopEvent(0) + doneEvent()
 
 	src := newSource(input)
 	stream := newGuardWithCounter(src, limit, 8, newTestCounter{"x": {1}, "a": {5}})
@@ -110,7 +119,7 @@ func TestRepetitionGuardStream_ChainLoop(t *testing.T) {
 	// limit=2, unit 'ab' as two tokens.
 	limit := 2
 	input := chatEvent("hello ") + chatEvent("ab") + chatEvent("ab") + chatEvent("ab") + doneEvent()
-	want := chatEvent("hello ") + chatEvent("ab") + chatEvent("ab") + doneEvent()
+	want := chatEvent("hello ") + chatEvent("ab") + chatEvent("ab") + stopEvent(0) + doneEvent()
 
 	src := newSource(input)
 	stream := newGuardWithCounter(src, limit, 8, newTestCounter{"hello ": {1}, "ab": {2, 3}})
@@ -132,7 +141,7 @@ func TestRepetitionGuardStream_FallbackStutter(t *testing.T) {
 	limit := 3
 	payload := periodicRunPayload(3) // 96 bytes
 	input := chatEvent("prefix") + chatEvent(payload) + doneEvent()
-	want := chatEvent("prefix") + chatEvent(payload) + doneEvent()
+	want := chatEvent("prefix") + chatEvent(payload) + stopEvent(0) + doneEvent()
 
 	src := newSource(input)
 	stream := newGuardWithCounter(src, limit, 8, nil) // nil counter -> byte fallback
@@ -269,7 +278,7 @@ func TestRepetitionGuardStream_UnknownModelFallsBack(t *testing.T) {
 	// Production constructor with an unresolvable model triggers via byte fallback.
 	payload := periodicRunPayload(3) // 96 bytes, period 32
 	input := chatEvent(payload) + chatEvent(payload) + doneEvent()
-	want := chatEvent(payload) + doneEvent()
+	want := chatEvent(payload) + stopEvent(0) + doneEvent()
 
 	src := newSource(input)
 	stream := NewRepetitionGuardStream(src, 3, 8, "no-such-model-xyz")
@@ -314,7 +323,7 @@ func TestRepetitionGuardStream_TriggerBeforeUpstreamEOF(t *testing.T) {
 	// Trigger fires early; trailing upstream bytes are dropped, output ends in [DONE].
 	payload := periodicRunPayload(3)
 	input := chatEvent(payload) + chatEvent("never-reached") + doneEvent()
-	want := chatEvent(payload) + doneEvent()
+	want := chatEvent(payload) + stopEvent(0) + doneEvent()
 
 	src := newSource(input)
 	stream := newGuardWithCounter(src, 3, 8, nil)

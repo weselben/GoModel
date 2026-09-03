@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"strings"
 	"sync"
 
 	"github.com/goccy/go-json"
@@ -14,7 +15,11 @@ import (
 // RepetitionGuardStream watches an upstream SSE stream for a text unit (a
 // single token or a short token chain) that starts repeating consecutively.
 // When the unit repeats limit times in a row, the guard closes the upstream
-// source, appends a data: [DONE]\n\n marker, and ends the stream.
+// source and ends the stream with the dialect's native termination: chat
+// completions get a synthetic finish_reason "stop" chunk plus data: [DONE],
+// Anthropic messages get message_delta(stop_reason "end_turn") plus
+// message_stop, and the Responses API gets a response.completed event. In
+// every case the client sees a normal turn end, not a broken connection.
 //
 // The guard is purely observational: bytes pass through to the caller as they
 // arrive and are never rewritten or held back. Detection runs eagerly on the
@@ -45,8 +50,31 @@ type RepetitionGuardStream struct {
 	closeErr   error
 	onTrigger  func()
 
+	// Envelope of the last observed chunk, echoed into the synthetic
+	// terminal chunk so the cut looks like a normal upstream finish.
+	envSeen    bool
+	envID      string
+	envObject  string
+	envModel   string
+	envCreated float64
+
+	// dialect pins the stream shape (chat completions, Anthropic messages,
+	// or the Responses API) from the first recognizable event; the
+	// termination the guard synthesizes on trigger matches that dialect.
+	dialect streamDialect
+
 	choices map[int]*choiceState
 }
+
+// streamDialect identifies which SSE wire shape a stream speaks.
+type streamDialect int
+
+const (
+	dialectUnknown streamDialect = iota
+	dialectChatCompletions
+	dialectAnthropicMessages
+	dialectResponses
+)
 
 // GuardOption customizes the guard at construction time.
 type GuardOption func(*RepetitionGuardStream)
@@ -244,6 +272,7 @@ func (s *RepetitionGuardStream) inspectEvent(event []byte) {
 		// Not JSON we can inspect; the bytes were forwarded unchanged.
 		return
 	}
+	s.captureEnvelope(decoded)
 
 	deltas := contentDeltas(decoded)
 	if len(deltas) == 0 {
@@ -339,8 +368,94 @@ func (s *RepetitionGuardStream) inspectDelta(index int, content []byte) bool {
 	return st.detectByteRun(content, s.limit)
 }
 
-// trigger closes the upstream once, appends the terminating [DONE] marker,
-// and marks the guard terminated. Everything already emitted stays emitted.
+// captureEnvelope remembers id/object/created/model from the latest decoded
+// chunk so the synthetic terminal chunk indistinguishably completes the
+// same conversation, and pins the stream dialect from the payload shape so
+// trigger() can speak the right wire protocol. Envelope-less test payloads
+// fall back to a minimal chunk carrying only choices.
+func (s *RepetitionGuardStream) captureEnvelope(decoded map[string]any) {
+	if s.dialect == dialectUnknown {
+		s.dialect = detectDialect(decoded)
+	}
+	s.envSeen = true
+	// Responses API events nest the envelope under "response".
+	envelope := decoded
+	if inner, ok := decoded["response"].(map[string]any); ok {
+		envelope = inner
+	}
+	if v, ok := envelope["id"].(string); ok {
+		s.envID = v
+	}
+	if v, ok := envelope["object"].(string); ok {
+		s.envObject = v
+	}
+	if v, ok := envelope["model"].(string); ok {
+		s.envModel = v
+	}
+	if v, ok := envelope["created"].(float64); ok {
+		s.envCreated = v
+	}
+	if v, ok := envelope["created_at"].(float64); ok {
+		s.envCreated = v
+	}
+}
+
+// detectDialect identifies the SSE wire shape from a decoded payload:
+// Anthropic messages events carry type "message_*"/"content_block_*",
+// Responses API events carry type "response.*", and chat completions carry
+// choices. Defaults to chat completions when nothing else matches.
+func detectDialect(decoded map[string]any) streamDialect {
+	t, _ := decoded["type"].(string)
+	switch {
+	case strings.HasPrefix(t, "message_") || strings.HasPrefix(t, "content_block_"):
+		return dialectAnthropicMessages
+	case strings.HasPrefix(t, "response."):
+		return dialectResponses
+	default:
+		return dialectChatCompletions
+	}
+}
+
+// terminalChunk builds the data payload the guard appends on trigger: a
+// chat-completion chunk whose only delta is empty and whose finish_reason is
+// "stop", exactly like the final chunk of a successful upstream stream.
+// Envelope fields are omitted when the stream never carried them.
+func (s *RepetitionGuardStream) terminalChunk(index int) []byte {
+	choice := map[string]any{
+		"index":         index,
+		"delta":         map[string]any{},
+		"finish_reason": "stop",
+	}
+	chunk := map[string]any{"choices": []any{choice}}
+	if s.envID != "" {
+		chunk["id"] = s.envID
+	}
+	if s.envObject != "" {
+		chunk["object"] = s.envObject
+	}
+	if s.envModel != "" {
+		chunk["model"] = s.envModel
+	}
+	if s.envCreated != 0 {
+		chunk["created"] = s.envCreated
+	}
+	b, _ := json.Marshal(chunk)
+	return b
+}
+
+// trigger closes the upstream once, appends a dialect-appropriate
+// synthetic termination (so clients that read finish_reason / stop_reason /
+// response.completed see a normal end), and marks the guard terminated.
+// Everything already emitted stays emitted.
+//
+//   - Chat completions: terminal chunk with finish_reason "stop", then
+//     data: [DONE] — mirrors a successful upstream stream.
+//   - Anthropic messages: message_delta with stop_reason "end_turn"
+//     (usage echoed from the last seen delta when known), then
+//     message_stop. No [DONE] marker — Anthropic streams end at
+//     message_stop.
+//   - Responses API: response.completed with status "completed" and the
+//     echoed response envelope. No [DONE] marker.
 func (s *RepetitionGuardStream) trigger(index int) {
 	if s.triggered {
 		return
@@ -349,15 +464,61 @@ func (s *RepetitionGuardStream) trigger(index int) {
 
 	_ = s.closeSource()
 
-	s.out.AppendString("data: ")
-	s.out.AppendBytes(donePayload)
-	s.out.AppendBytes(lfEventBoundary)
+	switch s.dialect {
+	case dialectAnthropicMessages:
+		s.out.AppendString("event: message_delta\n")
+		s.out.AppendString(`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":0}}`)
+		s.out.AppendBytes(lfEventBoundary)
+		s.out.AppendString("event: message_stop\n")
+		s.out.AppendString(`data: {"type":"message_stop"}`)
+		s.out.AppendBytes(lfEventBoundary)
+	case dialectResponses:
+		s.out.AppendString("event: response.completed\n")
+		s.out.AppendString("data: ")
+		s.out.AppendBytes(s.responsesCompletedPayload())
+		s.out.AppendBytes(lfEventBoundary)
+	default:
+		if s.envSeen {
+			s.out.AppendString("data: ")
+			s.out.AppendBytes(s.terminalChunk(index))
+			s.out.AppendBytes(lfEventBoundary)
+		}
+		s.out.AppendString("data: ")
+		s.out.AppendBytes(donePayload)
+		s.out.AppendBytes(lfEventBoundary)
+	}
 
 	slog.Warn("stream repetition guard triggered", "choice", index, "model", s.model)
 
 	if s.onTrigger != nil {
 		s.onTrigger()
 	}
+}
+
+// responsesCompletedPayload builds the data payload for the synthetic
+// response.completed event: the observed envelope plus status "completed".
+// Clients (Codex, the OpenAI SDK, AgentRunKit) treat this event as the
+// authoritative end of a Responses stream.
+func (s *RepetitionGuardStream) responsesCompletedPayload() []byte {
+	resp := map[string]any{
+		"object": "response",
+		"status": "completed",
+	}
+	if s.envID != "" {
+		resp["id"] = s.envID
+	}
+	if s.envModel != "" {
+		resp["model"] = s.envModel
+	}
+	if s.envCreated != 0 {
+		resp["created_at"] = s.envCreated
+	}
+	chunk := map[string]any{
+		"type":     "response.completed",
+		"response": resp,
+	}
+	b, _ := json.Marshal(chunk)
+	return b
 }
 
 // detectTokenRun appends the delta's token IDs to the rolling tail (capped at
@@ -485,10 +646,59 @@ var codeFenceMarker = []byte("```")
 // contentDeltas extracts choices[].delta.content string values from a decoded
 // chat-completion payload. Deltas carrying tool_calls or function_call are
 // never inspected and therefore never returned.
+// contentDeltas extracts (choiceIndex, text) pairs from a decoded SSE
+// payload across the three supported wire shapes:
+//
+//   - Chat completions: choices[].delta.content, skipping tool_calls and
+//     function_call deltas.
+//   - Anthropic messages: content_block_delta events with
+//     delta.type "text_delta" yield delta.text; thinking deltas and
+//     input_json_delta (tool use) are never inspected. The content-block
+//     index is the choice index.
+//   - Responses API: response.output_text.delta events yield the delta
+//     string; function-call and reasoning deltas are never inspected.
+//
+// Payloads that match no shape yield nil and are ignored.
 func contentDeltas(payload map[string]any) []struct {
 	choiceIndex int
 	content     []byte
 } {
+	if t, _ := payload["type"].(string); t != "" || payload["choices"] == nil {
+		switch {
+		case strings.HasPrefix(t, "content_block_"):
+			if t != "content_block_delta" {
+				return nil
+			}
+			delta, ok := payload["delta"].(map[string]any)
+			if !ok || delta["type"] != "text_delta" {
+				return nil
+			}
+			text, ok := delta["text"].(string)
+			if !ok || text == "" {
+				return nil
+			}
+			idx, _ := payload["index"].(float64)
+			return []struct {
+				choiceIndex int
+				content     []byte
+			}{{choiceIndex: int(idx), content: []byte(text)}}
+		case strings.HasPrefix(t, "response."):
+			if t != "response.output_text.delta" {
+				return nil
+			}
+			text, ok := payload["delta"].(string)
+			if !ok || text == "" {
+				return nil
+			}
+			return []struct {
+				choiceIndex int
+				content     []byte
+			}{{choiceIndex: 0, content: []byte(text)}}
+		default:
+			return nil
+		}
+	}
+
 	choicesRaw, ok := payload["choices"].([]any)
 	if !ok {
 		return nil
