@@ -102,7 +102,8 @@ const (
 
 	// Byte fallback bounds: the detector only trusts runs of at least
 	// fallbackMinRunBytes with a period of at most fallbackMaxUnitBytes.
-	fallbackMaxUnitBytes = 32
+	// 64 matches the fallback reference recorded in the wayfinder map (#62).
+	fallbackMaxUnitBytes = 64
 	fallbackMinRunBytes  = 96
 
 	// Encoded-blob heuristic window (base64/hex density + entropy).
