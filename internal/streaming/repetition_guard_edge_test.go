@@ -8,6 +8,7 @@ package streaming
 // gap stays visible — see wayfinder #56.
 
 import (
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -92,16 +93,16 @@ func TestEdge_LongUnitByteFallback(t *testing.T) {
 	}
 }
 
-// TestEdge_ReasoningContentNotInspected — DeepSeek-style streams carry
-// delta.reasoning_content alongside delta.content. The guard deliberately
-// inspects only message content (wayfinder #56 left reasoning detection
-// undecided), so a reasoning-only loop passes through untouched. This pins
-// the contract; flip it if #56 decides to inspect reasoning.
-func TestEdge_ReasoningContentNotInspected(t *testing.T) {
+// TestEdge_ReasoningContentInspected — DeepSeek-style streams carry
+// delta.reasoning_content alongside delta.content; a hang loops there
+// exactly like in content, so the guard inspects it with the same limit.
+// Wayfinder #56 resolved in favor of inspection when the gap surfaced in
+// production-shape brown testing.
+func TestEdge_ReasoningContentInspected(t *testing.T) {
 	reason := `data: {"choices":[{"delta":{"reasoning_content":"thinking... "}}]}` + "\n\n"
 	body := `data: {"choices":[{"delta":{"role":"assistant"}}]}` + "\n\n" +
 		strings.Repeat(reason, 200) +
-		chatEvent("Final answer.") + doneEvent()
+		chatEvent("never reached") + doneEvent()
 
 	src := newSource(body)
 	sink := &counterSink{}
@@ -113,10 +114,62 @@ func TestEdge_ReasoningContentNotInspected(t *testing.T) {
 	if err := stream.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
+	if n := sink.n.Load(); n != 1 {
+		t.Fatalf("trigger callback fired %d times, want 1", n)
+	}
+	if !strings.HasSuffix(string(out), doneEvent()) {
+		t.Fatalf("reasoning loop cut must end with [DONE]: tail=%q", tail(string(out), 80))
+	}
+	// Byte-fallback floor: the 12-byte unit needs a 96-byte run, so the cut
+	// lands around the 8th repeat — well before the 200 the upstream sent.
+	if c := strings.Count(string(out), "thinking..."); c > 10 {
+		t.Fatalf("reasoning loop leaked %d deltas, want <= 10", c)
+	}
+}
+
+// TestEdge_ReasoningContentTokenPath — the same loop on a resolvable model
+// trips the token detector at exactly the configured limit.
+func TestEdge_ReasoningContentTokenPath(t *testing.T) {
+	reason := `data: {"choices":[{"delta":{"reasoning_content":"a"}}]}` + "\n\n"
+	body := `data: {"choices":[{"delta":{"role":"assistant"}}]}` + "\n\n" +
+		strings.Repeat(reason, 30) + doneEvent()
+
+	guard := newGuardWithCounter(newSource(body), 3, 8, newTestCounter{"a": {5}})
+	out, err := io.ReadAll(guard)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if !strings.HasSuffix(string(out), stopEvent(0)+doneEvent()) {
+		t.Fatalf("token-path reasoning loop cut wrong: tail=%q", tail(string(out), 120))
+	}
+}
+
+// TestEdge_ByteTailTrim — the byte fallback tail is capped at
+// max(fallbackMinRunBytes, fallbackMaxUnitBytes*limit); a long,
+// non-periodic stream must flow through without triggering and exercise
+// the trim so memory stays bounded.
+func TestEdge_ByteTailTrim(t *testing.T) {
+	// "000,001,002,..." has no period <= 64, so nothing can trigger.
+	var b strings.Builder
+	for i := 0; i < 120; i++ {
+		fmt.Fprintf(&b, "%03d,", i)
+	}
+	body := chatEvent("seq: ") + chatEvent(b.String()) + doneEvent()
+
+	src := newSource(body)
+	sink := &counterSink{}
+	stream := NewRepetitionGuardStream(src, 2, 8, "totally-unknown-model", WithTriggerCallback(sink.inc))
+	out, err := io.ReadAll(stream)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
 	if string(out) != body {
-		t.Fatalf("reasoning_content stream altered\nwant len %d, got len %d", len(body), len(out))
+		t.Fatalf("non-periodic stream altered\nwant len %d, got len %d", len(body), len(out))
 	}
 	if sink.n.Load() != 0 {
-		t.Fatalf("trigger fired on reasoning_content-only deltas")
+		t.Fatalf("trigger fired on a non-periodic stream")
 	}
 }

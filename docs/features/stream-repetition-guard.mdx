@@ -45,6 +45,11 @@ Legitimate repetition is not a loop. The guard never inspects:
 - base64/hex-looking blobs (checked by symbol density and entropy),
 - `tool_calls` and `function_call` deltas.
 
+Reasoning streams are covered too: DeepSeek-style `delta.reasoning_content`
+is inspected with the same limit as visible content, so a model that loops
+inside its thinking is cut the same way. Anthropic `thinking_delta` events
+are not inspected (thinking legitimately repeats more than prose).
+
 ## Turn it on
 
 Environment variable:

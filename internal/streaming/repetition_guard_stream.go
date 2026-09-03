@@ -727,7 +727,13 @@ func contentDeltas(payload map[string]any) []struct {
 		}
 		content, ok := delta["content"].(string)
 		if !ok || content == "" {
-			continue
+			// DeepSeek-style reasoning streams carry the visible thinking
+			// in delta.reasoning_content; a hang loops there exactly like
+			// in content, so inspect it with the same limit.
+			content, ok = delta["reasoning_content"].(string)
+			if !ok || content == "" {
+				continue
+			}
 		}
 		out = append(out, struct {
 			choiceIndex int
