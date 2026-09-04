@@ -670,6 +670,8 @@ var codeFenceMarker = []byte("```")
 //     index is the choice index.
 //   - Responses API: response.output_text.delta events yield the delta
 //     string; function-call and reasoning deltas are never inspected.
+//     The state key is the composite output/content index, since deltas
+//     from different output items can interleave.
 //
 // Payloads that match no shape yield nil and are ignored.
 func contentDeltas(payload map[string]any) []struct {
@@ -703,10 +705,19 @@ func contentDeltas(payload map[string]any) []struct {
 			if !ok || text == "" {
 				return nil
 			}
+			// Deltas from different output items can interleave; key the
+			// guard state by the composite output/content index so
+			// independent tails never merge into a false repetition.
+			// Negative keys cannot collide with the non-negative
+			// choice/block indices of the other dialects, and the
+			// Responses termination ignores the index anyway.
+			outIdx, _ := payload["output_index"].(float64)
+			contentIdx, _ := payload["content_index"].(float64)
+			key := -1 - (int(outIdx)*65536 + int(contentIdx))
 			return []struct {
 				choiceIndex int
 				content     []byte
-			}{{choiceIndex: 0, content: []byte(text)}}
+			}{{choiceIndex: key, content: []byte(text)}}
 		default:
 			return nil
 		}

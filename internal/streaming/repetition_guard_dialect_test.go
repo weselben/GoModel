@@ -256,3 +256,40 @@ func TestDialect_MalformedDeltasIgnored(t *testing.T) {
 		t.Fatalf("trigger fired on malformed/tool deltas")
 	}
 }
+
+
+// TestDialect_ResponsesInterleavedItemsNeverMerge covers the Responses API
+// case where two output items interleave: each item streams 5-byte chunks
+// in lock-step, so the merged tail is one long periodic run of
+// "abcdefghij" while each item's own run stays below the byte fallback's
+// fallbackMinRunBytes ceiling (96). Keying state by the composite
+// output/content index keeps the items separate; sharing one choice state
+// would falsely trip the guard on the merged run.
+func TestDialect_ResponsesInterleavedItemsNeverMerge(t *testing.T) {
+	item0 := responsesEvent("response.output_text.delta", `{"type":"response.output_text.delta","item_id":"item_0","output_index":0,"content_index":0,"delta":"abcde"}`)
+	item1 := responsesEvent("response.output_text.delta", `{"type":"response.output_text.delta","item_id":"item_1","output_index":1,"content_index":0,"delta":"fghij"}`)
+	var body string
+	for i := 0; i < 10; i++ {
+		body += item0 + item1
+	}
+	body += responsesEvent("response.completed", `{"type":"response.completed","response":{"id":"resp_4","object":"response","status":"completed"}}`)
+
+	src := newSource(body)
+	sink := &counterSink{}
+	// Unknown model forces the byte-period fallback; "claude-x" would
+	// resolve a tokenizer and detect the per-item token runs instead.
+	stream := NewRepetitionGuardStream(src, 2, 8, "guard-test-unknown-model", WithTriggerCallback(sink.inc))
+	out, err := io.ReadAll(stream)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if string(out) != body {
+		t.Fatalf("interleaved items altered\nwant: %q\ngot:  %q", body, string(out))
+	}
+	if sink.n.Load() != 0 {
+		t.Fatalf("trigger fired on interleaved output items")
+	}
+}
