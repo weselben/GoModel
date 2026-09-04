@@ -336,7 +336,12 @@ func proxyPassthroughResponse(c *echo.Context, logger auditlog.LoggerInterface, 
 		// see provider-claimed bytes for events the guard synthesized.
 		guardedBody := streaming.NewRepetitionGuardStream(resp.Body, repetitionLimit, repetitionMaxPattern, model,
 			streaming.WithTriggerCallback(func() {
-				observability.StreamRepetitionTriggers.WithLabelValues(providerName, model).Inc()
+				// The passthrough path's model value comes from the client's
+				// request body, so labeling with it would let clients drive
+				// unbounded Prometheus series cardinality. Report the model as
+				// empty (the label key stays, keeping this series joinable
+				// with the translated path, which passes the real model).
+				observability.StreamRepetitionTriggers.WithLabelValues(providerName, "").Inc()
 			}))
 		wrappedStream := streaming.NewObservedSSEStream(guardedBody, observers...)
 		if len(observers) > 0 {
