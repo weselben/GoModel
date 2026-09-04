@@ -150,3 +150,28 @@ repetition_max_pattern: 12
 		t.Fatalf("RepetitionMaxPattern = %d, want 12", *cfg.RepetitionMaxPattern)
 	}
 }
+
+// The docs/features/stream-repetition-guard.mdx per-model override snippet
+// must decode cleanly with CONFIG_STRICT=true, otherwise the documented
+// example fails the user's first strict-mode load.
+func TestVirtualModelConfigYAML_DocSnippetLoads(t *testing.T) {
+	const src = `
+source: chat
+target: openai/gpt-4o
+repetition_limit: 4
+repetition_max_pattern: 8
+`
+	var cfg VirtualModelConfig
+	if err := yaml.Unmarshal([]byte(src), &cfg); err != nil {
+		t.Fatalf("doc snippet failed to decode: %v", err)
+	}
+	if cfg.Source != "chat" || cfg.Target != "openai/gpt-4o" {
+		t.Fatalf("scalar fields not decoded: %#v", cfg)
+	}
+	if cfg.RepetitionLimit == nil || *cfg.RepetitionLimit != 4 {
+		t.Fatalf("RepetitionLimit = %v, want pointer to 4", cfg.RepetitionLimit)
+	}
+	if cfg.RepetitionMaxPattern == nil || *cfg.RepetitionMaxPattern != 8 {
+		t.Fatalf("RepetitionMaxPattern = %v, want pointer to 8", cfg.RepetitionMaxPattern)
+	}
+}
