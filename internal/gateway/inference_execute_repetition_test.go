@@ -8,6 +8,8 @@ import (
 
 // TestResolveEffectiveRepetition mirrors the StreamResult override semantics:
 // workflow override 0 => guard off; override N => N; nil => global.
+// Per-field overrides inherit independently: an unset field falls back to the
+// orchestrator global even when its sibling override is set.
 func TestResolveEffectiveRepetition(t *testing.T) {
 	zero, five, twelve := 0, 5, 12
 	tests := []struct {
@@ -46,6 +48,16 @@ func TestResolveEffectiveRepetition(t *testing.T) {
 			}},
 			wantLimit:      0,
 			wantMaxPattern: 8,
+		},
+		{
+			name:        "maxPattern-only override keeps global limit active",
+			globalLimit: 10,
+			globalMax:   8,
+			workflow: &core.Workflow{Resolution: &core.RequestModelResolution{
+				RepetitionMaxPattern: &twelve,
+			}},
+			wantLimit:      10,
+			wantMaxPattern: 12,
 		},
 		{
 			name:           "nil workflow falls back to global",

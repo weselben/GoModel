@@ -15,27 +15,23 @@ func workflowSlowdown(workflow *core.Workflow) float64 {
 }
 
 // workflowRepetition extracts per-request repetition-guard overrides from the
-// matched workflow. ok reports whether at least one field carries an explicit
-// value: when false, the orchestrator globals should be used instead.
-// Per-model 0 with ok=true means "guard OFF" for the limit (a hard disable);
-// 0 with ok=false means "inherit the global" (the field is nil).
-func workflowRepetition(workflow *core.Workflow) (limit, maxPattern int, ok bool) {
+// matched workflow. limitSet and maxSet report which fields carry an explicit
+// value; unset fields inherit the orchestrator global. An explicitly set limit
+// of 0 means "guard OFF" for the request (a hard disable).
+func workflowRepetition(workflow *core.Workflow) (limit, maxPattern int, limitSet, maxSet bool) {
 	if workflow == nil || workflow.Resolution == nil {
-		return 0, 0, false
+		return 0, 0, false, false
 	}
 	res := workflow.Resolution
-	limitSet := res.RepetitionLimit != nil
-	maxSet := res.RepetitionMaxPattern != nil
-	if !limitSet && !maxSet {
-		return 0, 0, false
-	}
+	limitSet = res.RepetitionLimit != nil
+	maxSet = res.RepetitionMaxPattern != nil
 	if limitSet {
 		limit = *res.RepetitionLimit
 	}
 	if maxSet {
 		maxPattern = *res.RepetitionMaxPattern
 	}
-	return limit, maxPattern, true
+	return limit, maxPattern, limitSet, maxSet
 }
 
 func waitForInferenceSlowdown(ctx context.Context, workflow *core.Workflow, inferenceTime time.Duration) error {
