@@ -62,12 +62,17 @@ type ResilienceConfig struct {
 }
 
 // validateStreamRepetitionConfig rejects global repetition-guard settings that
-// would silently clamp later. A limit of 1 is meaningless — the guard clamps
-// it to the minimum of 2 — so it is a config error here, matching the
-// per-virtual-model rule in internal/virtualmodels/validation.go.
+// would silently clamp later. A negative or singular limit is meaningless —
+// the guard clamps it to the minimum of 2 — so it is a config error here,
+// matching the per-virtual-model rule in internal/virtualmodels/validation.go.
+// StreamRepetitionMaxPattern must be 0 (built-in default of 8) or in 1..64;
+// values outside that range would also be silently clamped.
 func validateStreamRepetitionConfig(cfg *ResilienceConfig) error {
-	if cfg.StreamRepetitionLimit == 1 {
-		return fmt.Errorf("resilience.stream_repetition_limit must be 0 (disabled) or at least 2, got 1")
+	if cfg.StreamRepetitionLimit < 0 || cfg.StreamRepetitionLimit == 1 {
+		return fmt.Errorf("resilience.stream_repetition_limit must be 0 (disabled) or at least 2, got %d", cfg.StreamRepetitionLimit)
+	}
+	if cfg.StreamRepetitionMaxPattern < 0 || cfg.StreamRepetitionMaxPattern > 64 {
+		return fmt.Errorf("resilience.stream_repetition_max_pattern must be 0 (default) or between 1 and 64, got %d", cfg.StreamRepetitionMaxPattern)
 	}
 	return nil
 }
