@@ -1096,3 +1096,58 @@ func TestDetectByteRun_RunLengthBelowNeed(t *testing.T) {
 		t.Fatalf("detectRun(\"xyxyx\", 3) = true, want false (runLength 5 < need 6)")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Read — stalled source busy-spin guard
+// ---------------------------------------------------------------------------
+
+// zeroReader always returns (0, nil): a source making no progress.
+type zeroReader struct{}
+
+func (zeroReader) Read([]byte) (int, error) { return 0, nil }
+
+func TestRepetitionGuardStream_ErrNoProgressOnStalledSource(t *testing.T) {
+	src := &recordingReadCloser{Reader: zeroReader{}}
+	stream := NewRepetitionGuardStream(src, 3, 8, "gpt-4o")
+	buf := make([]byte, 16)
+	var err error
+	reads := 0
+	for i := 0; i < maxConsecutiveZeroReads+10; i++ {
+		_, err = stream.Read(buf)
+		reads++
+		if err != nil {
+			break
+		}
+	}
+	if err != io.ErrNoProgress {
+		t.Fatalf("expected io.ErrNoProgress after %d stalled reads, got %v after %d reads",
+			maxConsecutiveZeroReads, err, reads)
+	}
+	if reads != maxConsecutiveZeroReads {
+		t.Fatalf("ErrNoProgress surfaced after %d reads, want %d", reads, maxConsecutiveZeroReads)
+	}
+	if src.closeCount != 0 {
+		t.Fatalf("stalled source must not be closed by the no-progress cutoff, got %d closes", src.closeCount)
+	}
+}
+
+// detectRun is the simplified byte-period detector used by tests and kept for
+// direct inspection: it reports whether tail ends in a periodic run with
+// period <= fallbackMaxUnitBytes that repeats limit times and spans at least
+// fallbackMinRunBytes.
+func detectRun(tail []byte, limit int) bool {
+	for p := 1; p <= fallbackMaxUnitBytes; p++ {
+		need := p * limit
+		if len(tail) < need {
+			break
+		}
+		if !byteTailRepeats(tail, p, need) {
+			continue
+		}
+		if run := byteRunLength(tail, p); run >= need && run >= fallbackMinRunBytes {
+			return true
+		}
+	}
+	return false
+}
+
