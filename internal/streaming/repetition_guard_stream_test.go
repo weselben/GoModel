@@ -508,7 +508,7 @@ func TestClampGuardParams(t *testing.T) {
 // still delivers those buffered bytes: the client must not lose the final
 // delta just because the upstream stream ended mid-event.
 func TestRepetitionGuardStream_ForwardsUnterminatedFinalEvent(t *testing.T) {
-	finalEvent := chatEvent("tail") // no trailing "\n\n", no [DONE]
+	finalEvent := strings.TrimSuffix(chatEvent("tail"), "\n\n") // no trailing "\n\n", no [DONE]
 	src := newSource(finalEvent)
 	stream := NewRepetitionGuardStream(src, 3, 8, "gpt-4o")
 
