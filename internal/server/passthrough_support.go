@@ -332,6 +332,8 @@ func proxyPassthroughResponse(c *echo.Context, logger auditlog.LoggerInterface, 
 		// observers: it closes the upstream early and appends a synthetic
 		// [DONE] when a repeated text unit trips the limit, while limit <= 0
 		// returns the source unchanged so the relay stays byte-identical.
+		// Keeping the guard upstream of the observers means observers never
+		// see provider-claimed bytes for events the guard synthesized.
 		guardedBody := streaming.NewRepetitionGuardStream(resp.Body, repetitionLimit, repetitionMaxPattern, model,
 			streaming.WithTriggerCallback(func() {
 				observability.StreamRepetitionTriggers.WithLabelValues(providerName, model).Inc()

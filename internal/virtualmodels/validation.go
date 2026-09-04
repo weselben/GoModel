@@ -160,14 +160,21 @@ const (
 )
 
 // validateRepetitionGuard checks the two repetition-guard fields together:
-// nil on either inherits; repetition_limit must be >= 0 (0 explicitly disables
-// the guard); repetition_max_pattern must be in 1..64. Validation is combined
-// because the two fields are a pair — the guard has no use for one without
-// the other — and reporting the first violation gives the operator a precise
-// pointer to the offending field.
+// nil on either inherits; repetition_limit must be 0 (disables the guard) or
+// >= 2 (1 is rejected because clampGuardParams silently bumps it to the
+// minimum of 2); repetition_max_pattern must be in 1..64. Validation is
+// combined because the two fields are a pair — the guard has no use for one
+// without the other — and reporting the first violation gives the operator a
+// precise pointer to the offending field.
 func validateRepetitionGuard(repetitionLimit, repetitionMaxPattern *int) error {
-	if repetitionLimit != nil && *repetitionLimit < 0 {
-		return newValidationError("repetition_limit must be 0 (disabled) or greater", nil)
+	if repetitionLimit != nil {
+		limit := *repetitionLimit
+		if limit < 0 {
+			return newValidationError("repetition_limit must be 0 (disabled) or greater", nil)
+		}
+		if limit == 1 {
+			return newValidationError("repetition_limit must be 0 (disabled) or at least 2", nil)
+		}
 	}
 	if repetitionMaxPattern != nil {
 		pattern := *repetitionMaxPattern

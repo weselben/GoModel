@@ -154,6 +154,7 @@ func TestUpsertValidatesRepetitionGuard(t *testing.T) {
 		{name: "limit 0 valid (explicit off)", repetitionLimit: newInt(0), repetitionMaxPattern: newInt(8)},
 		{name: "limit 3 and max 8", repetitionLimit: newInt(3), repetitionMaxPattern: newInt(8)},
 		{name: "limit -1 rejected", repetitionLimit: newInt(-1), repetitionMaxPattern: newInt(8), wantInvalid: true},
+		{name: "limit 1 rejected (clamped to minLimit=2)", repetitionLimit: newInt(1), repetitionMaxPattern: newInt(8), wantInvalid: true},
 		{name: "max_pattern 1 valid", repetitionLimit: newInt(3), repetitionMaxPattern: newInt(1)},
 		{name: "max_pattern 64 valid", repetitionLimit: newInt(3), repetitionMaxPattern: newInt(64)},
 		{name: "max_pattern 0 rejected", repetitionLimit: newInt(3), repetitionMaxPattern: newInt(0), wantInvalid: true},
