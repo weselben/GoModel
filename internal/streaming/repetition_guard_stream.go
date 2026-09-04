@@ -244,13 +244,16 @@ func (s *RepetitionGuardStream) observe(data []byte) {
 		}
 
 		event := s.pending[:idx]
+		sep := s.pending[idx : idx+sepLen]
 		s.pending = s.pending[idx+sepLen:]
 		if len(event) == 0 {
 			continue
 		}
 
+		// Re-append the matched separator so a CRLF upstream stream passes
+		// through byte-identical; we never replace it with the LF constant.
 		s.out.AppendBytes(event)
-		s.out.AppendBytes(lfEventBoundary)
+		s.out.AppendBytes(sep)
 		s.inspectEvent(event)
 		if s.triggered {
 			s.pending = s.pending[:0]
