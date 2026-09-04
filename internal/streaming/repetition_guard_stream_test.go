@@ -26,6 +26,25 @@ func newSource(data string) *recordingReadCloser {
 	return &recordingReadCloser{Reader: strings.NewReader(data)}
 }
 
+// newGuardWithCounter is a test helper that builds the guard with an explicit
+// TokenCounter, bypassing lazy model resolution. A nil counter selects the
+// byte fallback directly.
+func newGuardWithCounter(source io.ReadCloser, limit, maxPattern int, counter TokenCounter) io.ReadCloser {
+	if source == nil || limit <= 0 {
+		return source
+	}
+	limit, maxPattern = clampGuardParams(limit, maxPattern)
+	g := &RepetitionGuardStream{
+		source:          source,
+		limit:           limit,
+		maxPattern:      maxPattern,
+		counter:         counter,
+		counterResolved: true,
+		choices:         make(map[int]*choiceState),
+	}
+	return g
+}
+
 // chatEvent builds a single-line SSE chat-completion event carrying content as
 // delta.content (JSON-escaped).
 func chatEvent(content string) string {
