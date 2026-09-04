@@ -102,6 +102,11 @@ func (s *translatedInferenceService) dispatchMessagesNative(c *echo.Context, req
 		AuditPath:          "/v1/messages",
 		Model:              req.Model,
 	}
+	// Per-request repetition-guard overrides (alias/policy repetition_limit)
+	// win over the service-level defaults, matching resolveEffectiveRepetition
+	// on the translated pipeline; nothing here would otherwise let an alias
+	// pin its own guard for the native /v1/messages path.
+	repetitionLimit, repetitionMaxPattern := effectiveMessagesNativeRepetition(workflow, s.streamRepetitionLimit, s.streamRepetitionMaxPattern)
 	// Request rewriters (ext extensions) that asked for response feedback
 	// observe the native SSE stream too; its Anthropic-native usage events
 	// are understood by the feedback observer.
@@ -118,7 +123,25 @@ func (s *translatedInferenceService) dispatchMessagesNative(c *echo.Context, req
 			providerName: providerName,
 		})
 	}
-	return proxyPassthroughResponse(c, s.logger, s.usageLogger, s.pricingResolver, anthropicProviderType, providerName, "messages", info, resp, s.streamRepetitionLimit, s.streamRepetitionMaxPattern, extraObservers...)
+	return proxyPassthroughResponse(c, s.logger, s.usageLogger, s.pricingResolver, anthropicProviderType, providerName, "messages", info, resp, repetitionLimit, repetitionMaxPattern, extraObservers...)
+}
+
+// effectiveMessagesNativeRepetition mirrors gateway resolveEffectiveRepetition
+// semantics for the native /v1/messages forwarding path: each workflow
+// override field independently wins when set, unset fields inherit the
+// service-level default, and a nil workflow/resolution is transparent.
+func effectiveMessagesNativeRepetition(workflow *core.Workflow, defaultLimit, defaultMaxPattern int) (limit, maxPattern int) {
+	limit, maxPattern = defaultLimit, defaultMaxPattern
+	if workflow == nil || workflow.Resolution == nil {
+		return limit, maxPattern
+	}
+	if v := workflow.Resolution.RepetitionLimit; v != nil {
+		limit = *v
+	}
+	if v := workflow.Resolution.RepetitionMaxPattern; v != nil {
+		maxPattern = *v
+	}
+	return limit, maxPattern
 }
 
 // rewriteMessagesModel returns body with its top-level "model" value replaced
