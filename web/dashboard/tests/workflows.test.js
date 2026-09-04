@@ -207,6 +207,7 @@ test("workflowChart returns the shared chart contract for workflow sources", () 
       failoverConnClass: "",
       failoverStatusLabel: null,
       failoverTargetLabel: null,
+      failoverAttempts: [],
       aiLabel: "openai",
       aiSublabel: "gpt-5",
       aiConnClass: "",
@@ -324,6 +325,7 @@ test("workflowAuditChart returns the shared chart contract for audit runtime ent
       failoverConnClass: "workflow-conn-dim",
       failoverStatusLabel: null,
       failoverTargetLabel: null,
+      failoverAttempts: [],
       aiLabel: "openai",
       aiSublabel: "gpt-5",
       aiConnClass: "workflow-conn-dim",
@@ -340,6 +342,81 @@ test("workflowAuditChart returns the shared chart contract for audit runtime ent
       showAudit: true,
       workflowID: "historical-v1",
     },
+  );
+});
+
+test("workflowAuditChart lists the tried models of each failover leg on the chart", () => {
+  const entry = {
+    requested_model: "forge/subagent",
+    provider: "zai",
+    model: "provider-b/glm-5.3-flash",
+    status_code: 200,
+    data: {
+      workflow_features: {
+        cache: false,
+        audit: true,
+        usage: false,
+        budget: false,
+        guardrails: false,
+        failover: true,
+      },
+      failover: { target_model: "provider-b/glm-5.3-flash" },
+      attempts: [
+        {
+          seq: 1,
+          kind: "primary",
+          model: "provider-a/qwen-35b",
+          status_code: 503,
+          success: false,
+        },
+        {
+          seq: 2,
+          kind: "failover",
+          model: "provider-a/llama-70b",
+          status_code: 429,
+          success: false,
+        },
+        {
+          seq: 3,
+          kind: "failover",
+          model: "provider-b/glm-5.3-flash",
+          status_code: 200,
+          success: true,
+        },
+      ],
+    },
+  };
+
+  const chart = workflowAuditChart(entry, null, ALL_CAPS);
+  assert.equal(chart.showFailover, true);
+  assert.deepEqual(chart.failoverAttempts, [
+    { seq: 1, model: "provider-a/qwen-35b", statusCode: 503, success: false },
+    { seq: 2, model: "provider-a/llama-70b", statusCode: 429, success: false },
+    { seq: 3, model: "provider-b/glm-5.3-flash", statusCode: 200, success: true },
+  ]);
+
+  // A lone attempt has no chain to show; missing attempts likewise.
+  assert.deepEqual(
+    workflowAuditChart(
+      {
+        ...entry,
+        data: {
+          ...entry.data,
+          attempts: [{ seq: 1, kind: "primary", model: "m", status_code: 200, success: true }],
+        },
+      },
+      null,
+      ALL_CAPS,
+    ).failoverAttempts,
+    [],
+  );
+  assert.deepEqual(
+    workflowAuditChart(
+      { ...entry, data: { ...entry.data, attempts: undefined } },
+      null,
+      ALL_CAPS,
+    ).failoverAttempts,
+    [],
   );
 });
 

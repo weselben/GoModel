@@ -21,7 +21,7 @@
 <!-- One pipeline node. `icon` is a lucide icon (omitted for the AI node);
      `variant` carries the structural class, `state` the computed status
      class from workflowChartLogic.js. -->
-{#snippet node({ icon, label, variant = "workflow-node-feature", state, sub, badge })}
+{#snippet node({ icon, label, variant = "workflow-node-feature", state, sub, badge, extra })}
   <div class={["workflow-node", variant, state]}>
     {#if icon}
       <div
@@ -37,6 +37,9 @@
     {/if}
     {#if sub}
       <span class="workflow-node-sub">{sub}</span>
+    {/if}
+    {#if extra}
+      {@render extra()}
     {/if}
   </div>
 {/snippet}
@@ -101,7 +104,28 @@
         state: chart.failoverNodeClass,
         badge: chart.failoverStatusLabel,
         sub: chart.failoverTargetLabel,
+        extra: failoverAttempts,
       })}
+      {#snippet failoverAttempts()}
+        {#if chart.failoverAttempts && chart.failoverAttempts.length > 0}
+          <div class="workflow-failover-attempts">
+            {#each chart.failoverAttempts as attempt, i (attempt.seq)}
+              {#if i > 0}<span class="workflow-failover-attempt-arrow">→</span>{/if}
+              <span
+                class="workflow-failover-attempt"
+                class:workflow-failover-attempt-ok={attempt.success}
+                class:workflow-failover-attempt-failed={!attempt.success}
+                title={"#" + attempt.seq + " · " + attempt.model + " · " + (attempt.statusCode || "")}
+              >
+                <span class="workflow-failover-attempt-status"
+                  >{attempt.statusCode || "—"}</span
+                >
+                <span class="workflow-failover-attempt-model">{attempt.model}</span>
+              </span>
+            {/each}
+          </div>
+        {/if}
+      {/snippet}
     {/if}
 
     <div class={["workflow-conn", chart.responseConnClass]}></div>
@@ -520,6 +544,49 @@
   .workflow-node-neutral .workflow-node-badge {
     background: color-mix(in srgb, var(--text-muted) 10%, var(--bg));
     border-color: color-mix(in srgb, var(--text-muted) 28%, var(--border));
+    color: var(--text-muted);
+  }
+
+  /* Per-attempt tried-model chain inside the Failover node: one chip per
+     leg the request swept, status-colored, in call order. The node grows
+     vertically so the pipeline row stays aligned. */
+  .workflow-failover-attempts {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 3px;
+    margin-top: 4px;
+    max-width: 220px;
+  }
+
+  .workflow-failover-attempt {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    max-width: 100%;
+    font-size: 10px;
+    line-height: 1.2;
+  }
+
+  .workflow-failover-attempt-status {
+    flex: 0 0 auto;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-weight: 700;
+  }
+
+  .workflow-failover-attempt-ok .workflow-failover-attempt-status {
+    color: var(--success);
+  }
+
+  .workflow-failover-attempt-failed .workflow-failover-attempt-status {
+    color: var(--danger);
+  }
+
+  .workflow-failover-attempt-model {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--font-mono, ui-monospace, monospace);
     color: var(--text-muted);
   }
 
