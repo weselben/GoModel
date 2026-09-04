@@ -75,10 +75,20 @@ func TestDialect_AnthropicLoopCut(t *testing.T) {
 	if n := sink.n.Load(); n != 1 {
 		t.Fatalf("trigger callback fired %d times, want 1", n)
 	}
+	if !strings.Contains(output, `event: content_block_stop`) ||
+		!strings.Contains(output, `"type":"content_block_stop","index":0`) {
+		t.Fatalf("missing content_block_stop before message_delta in output:\n%s", tail(output, 300))
+	}
 	if !strings.Contains(output, `event: message_delta`) ||
 		!strings.Contains(output, `"stop_reason":"end_turn"`) ||
 		!strings.Contains(output, `event: message_stop`) {
 		t.Fatalf("missing anthropic termination events in output:\n%s", tail(output, 300))
+	}
+	// The synthetic message_delta must not carry a usage key: the guard
+	// cannot know the real token count, and a hardcoded 0 makes
+	// usage-accumulating clients under-count.
+	if strings.Contains(output[strings.LastIndex(output, "event: message_delta"):], `"usage"`) {
+		t.Fatalf("synthetic message_delta must omit the usage key:\n%s", tail(output, 200))
 	}
 	if strings.Contains(output, "data: [DONE]") {
 		t.Fatalf("anthropic streams must not receive a [DONE] marker:\n%s", tail(output, 200))

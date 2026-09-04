@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -455,7 +456,7 @@ func (s *RepetitionGuardStream) terminalChunk(index int) []byte {
 //   - Chat completions: terminal chunk with finish_reason "stop", then
 //     data: [DONE] — mirrors a successful upstream stream.
 //   - Anthropic messages: message_delta with stop_reason "end_turn"
-//     (usage echoed from the last seen delta when known), then
+//     (no usage key — the guard cannot know the real token count), then
 //     message_stop. No [DONE] marker — Anthropic streams end at
 //     message_stop.
 //   - Responses API: response.completed with status "completed" and the
@@ -470,8 +471,15 @@ func (s *RepetitionGuardStream) trigger(index int) {
 
 	switch s.dialect {
 	case dialectAnthropicMessages:
+		// Close the still-open text block first: strict Anthropic clients
+		// track per-block state and hang on an unclosed content_block.
+		s.out.AppendString("event: content_block_stop\n")
+		s.out.AppendString(`data: {"type":"content_block_stop","index":`)
+		s.out.AppendString(strconv.Itoa(index))
+		s.out.AppendString("}")
+		s.out.AppendBytes(lfEventBoundary)
 		s.out.AppendString("event: message_delta\n")
-		s.out.AppendString(`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":0}}`)
+		s.out.AppendString(`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}`)
 		s.out.AppendBytes(lfEventBoundary)
 		s.out.AppendString("event: message_stop\n")
 		s.out.AppendString(`data: {"type":"message_stop"}`)
