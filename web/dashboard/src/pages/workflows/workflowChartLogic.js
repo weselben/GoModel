@@ -279,6 +279,28 @@ function workflowFailoverTargetLabel(runtime) {
   return runtime && runtime.failoverTarget ? runtime.failoverTarget : null;
 }
 
+// workflowFailoverAttempts summarizes the per-attempt provider trail of an
+// audit entry for the Failover node: which model each leg tried and with
+// which status, in call order. A lone attempt has no chain to show.
+function workflowFailoverAttempts(entry) {
+  const attempts =
+    entry && entry.data && Array.isArray(entry.data.attempts)
+      ? entry.data.attempts
+      : [];
+  if (attempts.length <= 1) return [];
+  return attempts
+    .map((attempt, index) => {
+      const code = Number(attempt && attempt.status_code);
+      return {
+        seq: Number((attempt && attempt.seq) || index + 1),
+        model: String((attempt && attempt.model) || "").trim(),
+        statusCode: Number.isFinite(code) && code > 0 ? code : null,
+        success: !!(attempt && attempt.success),
+      };
+    })
+    .sort((a, b) => a.seq - b.seq);
+}
+
 // A cache hit bypasses the AI call, so both the connector into the AI node
 // and the one out to Response are dimmed.
 function workflowBypassedConnClass(runtime) {
@@ -416,6 +438,7 @@ function workflowChartModel(source, runtime, options, caps) {
     failoverConnClass: showFailover ? workflowFailoverConnClass(runtime) : "",
     failoverStatusLabel: showFailover ? workflowFailoverStatusLabel(runtime) : null,
     failoverTargetLabel: showFailover ? workflowFailoverTargetLabel(runtime) : null,
+    failoverAttempts: showFailover ? workflowFailoverAttempts(config.entry) : [],
     aiLabel: workflowAiLabel(source, runtime),
     aiSublabel: workflowAiSublabel(source, runtime),
     aiConnClass: workflowBypassedConnClass(runtime),
