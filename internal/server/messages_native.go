@@ -127,21 +127,16 @@ func (s *translatedInferenceService) dispatchMessagesNative(c *echo.Context, req
 }
 
 // effectiveMessagesNativeRepetition mirrors gateway resolveEffectiveRepetition
-// semantics for the native /v1/messages forwarding path: each workflow
-// override field independently wins when set, unset fields inherit the
-// service-level default, and a nil workflow/resolution is transparent.
+// semantics for the native /v1/messages forwarding path by delegating to the
+// shared core helper: each workflow override field independently wins when
+// set, unset fields inherit the service-level default, and a nil
+// workflow/resolution is transparent.
 func effectiveMessagesNativeRepetition(workflow *core.Workflow, defaultLimit, defaultMaxPattern int) (limit, maxPattern int) {
-	limit, maxPattern = defaultLimit, defaultMaxPattern
-	if workflow == nil || workflow.Resolution == nil {
-		return limit, maxPattern
+	var resolution *core.RequestModelResolution
+	if workflow != nil {
+		resolution = workflow.Resolution
 	}
-	if v := workflow.Resolution.RepetitionLimit; v != nil {
-		limit = *v
-	}
-	if v := workflow.Resolution.RepetitionMaxPattern; v != nil {
-		maxPattern = *v
-	}
-	return limit, maxPattern
+	return core.ResolveRepetitionWithDefaults(resolution, defaultLimit, defaultMaxPattern)
 }
 
 // rewriteMessagesModel returns body with its top-level "model" value replaced
