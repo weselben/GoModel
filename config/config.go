@@ -290,6 +290,9 @@ func Load() (*LoadResult, error) {
 	if err := validateRateLimitConfig(&cfg.RateLimits); err != nil {
 		return nil, err
 	}
+	if err := validateStreamRepetitionConfig(&cfg.Resilience); err != nil {
+		return nil, err
+	}
 	cfg.Server.BasePath = NormalizeBasePath(cfg.Server.BasePath)
 	cfg.Server.UserPathHeader, err = NormalizeHeaderName(cfg.Server.UserPathHeader, "X-GoModel-User-Path")
 	if err != nil {

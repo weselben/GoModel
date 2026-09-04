@@ -35,6 +35,17 @@ func (o *InferenceOrchestrator) DispatchChatCompletion(
 	})
 }
 
+// resolveEffectiveRepetition selects the stream repetition-guard settings for
+// this request: workflow override fields win independently, unset fields
+// inherit the orchestrator global/default.
+func (o *InferenceOrchestrator) resolveEffectiveRepetition(workflow *core.Workflow) (limit, maxPattern int) {
+	var resolution *core.RequestModelResolution
+	if workflow != nil {
+		resolution = workflow.Resolution
+	}
+	return core.ResolveRepetitionWithDefaults(resolution, o.streamRepetitionLimit, o.streamRepetitionMaxPattern)
+}
+
 // StreamChatCompletion opens a chat SSE stream. Stream usage is recorded by the caller's stream observer.
 func (o *InferenceOrchestrator) StreamChatCompletion(ctx context.Context, workflow *core.Workflow, req *core.ChatRequest) (*StreamResult, error) {
 	if err := o.validateProviderAndRequest(req != nil, "chat request is required"); err != nil {
@@ -46,11 +57,14 @@ func (o *InferenceOrchestrator) StreamChatCompletion(ctx context.Context, workfl
 	if err != nil {
 		return nil, err
 	}
+	repetitionLimit, repetitionMaxPattern := o.resolveEffectiveRepetition(workflow)
 	return &StreamResult{
-		Stream:           stream,
-		slowdownFactor:   workflowSlowdown(workflow),
-		inferenceStarted: started,
-		Meta:             meta,
+		Stream:               stream,
+		slowdownFactor:       workflowSlowdown(workflow),
+		inferenceStarted:     started,
+		repetitionLimit:      repetitionLimit,
+		repetitionMaxPattern: repetitionMaxPattern,
+		Meta:                 meta,
 	}, nil
 }
 
@@ -92,11 +106,14 @@ func (o *InferenceOrchestrator) StreamResponses(ctx context.Context, workflow *c
 	if err != nil {
 		return nil, err
 	}
+	repetitionLimit, repetitionMaxPattern := o.resolveEffectiveRepetition(workflow)
 	return &StreamResult{
-		Stream:           stream,
-		slowdownFactor:   workflowSlowdown(workflow),
-		inferenceStarted: started,
-		Meta:             meta,
+		Stream:               stream,
+		slowdownFactor:       workflowSlowdown(workflow),
+		inferenceStarted:     started,
+		repetitionLimit:      repetitionLimit,
+		repetitionMaxPattern: repetitionMaxPattern,
+		Meta:                 meta,
 	}, nil
 }
 

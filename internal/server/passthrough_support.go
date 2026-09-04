@@ -16,6 +16,7 @@ import (
 
 	"github.com/enterpilot/gomodel/internal/auditlog"
 	"github.com/enterpilot/gomodel/internal/core"
+	"github.com/enterpilot/gomodel/internal/observability"
 	"github.com/enterpilot/gomodel/internal/streaming"
 	"github.com/enterpilot/gomodel/internal/usage"
 )
@@ -255,14 +256,16 @@ func passthroughAuditPath(c *echo.Context, providerType, endpoint string, info *
 }
 
 func (s *passthroughService) proxyPassthroughResponse(c *echo.Context, providerType, providerName, endpoint string, info *core.PassthroughRouteInfo, resp *core.PassthroughResponse) error {
-	return proxyPassthroughResponse(c, s.logger, s.usageLogger, s.pricingResolver, providerType, providerName, endpoint, info, resp)
+	return proxyPassthroughResponse(c, s.logger, s.usageLogger, s.pricingResolver, providerType, providerName, endpoint, info, resp, s.streamRepetitionLimit, s.streamRepetitionMaxPattern)
 }
 
 // proxyPassthroughResponse relays a provider-native response (JSON or SSE) to
 // the client, attaching audit and usage stream observers plus any
 // extraObservers the caller supplies for SSE responses. It is shared by the
 // /p/ passthrough surface and the /v1/messages native forwarding path.
-func proxyPassthroughResponse(c *echo.Context, logger auditlog.LoggerInterface, usageLogger usage.LoggerInterface, pricingResolver usage.PricingResolver, providerType, providerName, endpoint string, info *core.PassthroughRouteInfo, resp *core.PassthroughResponse, extraObservers ...streaming.Observer) error {
+// repetitionLimit and repetitionMaxPattern configure the stream repetition
+// guard on SSE responses; limit <= 0 leaves the relay byte-identical.
+func proxyPassthroughResponse(c *echo.Context, logger auditlog.LoggerInterface, usageLogger usage.LoggerInterface, pricingResolver usage.PricingResolver, providerType, providerName, endpoint string, info *core.PassthroughRouteInfo, resp *core.PassthroughResponse, repetitionLimit, repetitionMaxPattern int, extraObservers ...streaming.Observer) error {
 	if resp == nil || resp.Body == nil {
 		return handleError(c, core.NewProviderError(providerType, http.StatusBadGateway, "provider returned empty passthrough response", nil))
 	}
@@ -325,7 +328,22 @@ func proxyPassthroughResponse(c *echo.Context, logger auditlog.LoggerInterface, 
 			observers = append(observers, observer)
 		}
 		observers = append(observers, extraObservers...)
-		wrappedStream := streaming.NewObservedSSEStream(resp.Body, observers...)
+		// The repetition guard sits between the upstream body and the
+		// observers: it closes the upstream early and appends a synthetic
+		// [DONE] when a repeated text unit trips the limit, while limit <= 0
+		// returns the source unchanged so the relay stays byte-identical.
+		// Keeping the guard upstream of the observers means observers never
+		// see provider-claimed bytes for events the guard synthesized.
+		guardedBody := streaming.NewRepetitionGuardStream(resp.Body, repetitionLimit, repetitionMaxPattern, model,
+			streaming.WithTriggerCallback(func() {
+				// The passthrough path's model value comes from the client's
+				// request body, so labeling with it would let clients drive
+				// unbounded Prometheus series cardinality. Report the model as
+				// empty (the label key stays, keeping this series joinable
+				// with the translated path, which passes the real model).
+				observability.StreamRepetitionTriggers.WithLabelValues(providerName, "").Inc()
+			}))
+		wrappedStream := streaming.NewObservedSSEStream(guardedBody, observers...)
 		if len(observers) > 0 {
 			defer func() {
 				_ = wrappedStream.Close()

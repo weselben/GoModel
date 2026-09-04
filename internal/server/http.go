@@ -121,6 +121,8 @@ type Config struct {
 	Tagging                         *tagging.Service                       // Optional: request labelling based on configured tagging headers
 	SessionDetector                 *session.Detector                      // Optional: client session identification for sticky routing and audit grouping
 	VersionChecker                  *versioncheck.Checker                  // Optional: daily update check backing GET /version
+	StreamRepetitionLimit           int                                    // Abort a chat SSE stream when the same text unit repeats this many times consecutively (0 disables)
+	StreamRepetitionMaxPattern      int                                    // Maximum chain length in tokens treated as one repeating unit by the stream repetition guard (0 = built-in default 8)
 }
 
 // ReadinessProbe verifies that a dependency the gateway owns is reachable.
@@ -192,6 +194,8 @@ func New(provider core.RoutableProvider, cfg *Config) *Server {
 		handler.failoverPolicy = cfg.FailoverPolicy
 		handler.rateLimiter = cfg.RateLimiter
 		handler.usageSummarizer = cfg.UsageSummarizer
+		handler.streamRepetitionLimit = cfg.StreamRepetitionLimit
+		handler.streamRepetitionMaxPattern = cfg.StreamRepetitionMaxPattern
 	}
 	if cfg != nil {
 		handler.batchRequestPreparer = cfg.BatchRequestPreparer

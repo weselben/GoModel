@@ -31,7 +31,13 @@ type upsertVirtualModelRequest struct {
 	Description string   `json:"description,omitempty"`
 	// Slowdown is an extra-time factor from 0.1 to 10; zero disables it.
 	Slowdown *float64 `json:"slowdown,omitempty"`
-	Enabled  *bool    `json:"enabled,omitempty"`
+	// RepetitionLimit aborts the stream after this many consecutive repeats;
+	// zero explicitly disables the guard, nil inherits the global setting.
+	RepetitionLimit *int `json:"repetition_limit,omitempty"`
+	// RepetitionMaxPattern is the maximum repeating token chain; nil inherits
+	// the global default (8).
+	RepetitionMaxPattern *int  `json:"repetition_max_pattern,omitempty"`
+	Enabled              *bool `json:"enabled,omitempty"`
 }
 
 // virtualModelTargetRequest is one load-balancing destination. Model may be a
@@ -162,14 +168,16 @@ func (h *Handler) DeleteVirtualModel(c *echo.Context) error {
 // defaults to true, preserving the existing value when omitted.
 func (h *Handler) buildVirtualModelUpsert(source string, req upsertVirtualModelRequest) (virtualmodels.VirtualModel, error) {
 	vm := virtualmodels.VirtualModel{
-		Source:          source,
-		Strategy:        strings.TrimSpace(req.Strategy),
-		SessionAffinity: req.SessionAffinity,
-		Failover:        req.Failover,
-		UserPaths:       req.UserPaths,
-		Description:     strings.TrimSpace(req.Description),
-		Slowdown:        req.Slowdown,
-		Enabled:         h.virtualModels.ResolveUpsertEnabled(source, req.OldSource, req.Enabled),
+		Source:               source,
+		Strategy:             strings.TrimSpace(req.Strategy),
+		SessionAffinity:      req.SessionAffinity,
+		Failover:             req.Failover,
+		UserPaths:            req.UserPaths,
+		Description:          strings.TrimSpace(req.Description),
+		Slowdown:             req.Slowdown,
+		RepetitionLimit:      req.RepetitionLimit,
+		RepetitionMaxPattern: req.RepetitionMaxPattern,
+		Enabled:              h.virtualModels.ResolveUpsertEnabled(source, req.OldSource, req.Enabled),
 	}
 
 	targets, err := buildVirtualModelTargets(req)

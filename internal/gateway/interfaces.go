@@ -28,6 +28,14 @@ type ModelSlowdownResolver interface {
 	ResolveSlowdown(context.Context, core.RequestedModelSelector, core.ModelSelector) float64
 }
 
+// ModelRepetitionResolver optionally resolves per-request repetition-guard
+// settings (limit and max_pattern) for a requested/resolved model pair. Each
+// field independently inherits when nil; a non-nil limit of 0 explicitly
+// disables the guard for the request.
+type ModelRepetitionResolver interface {
+	ResolveRepetitionLimit(ctx context.Context, requested core.RequestedModelSelector, resolved core.ModelSelector) (limit, maxPattern *int)
+}
+
 // FailoverResolver resolves alternate concrete model selectors for a translated
 // request after the primary selector has already been resolved.
 type FailoverResolver interface {

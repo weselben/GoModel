@@ -25,6 +25,7 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/prometheus/client_golang v1.24.1
 	github.com/redis/go-redis/v9 v9.22.0
+	github.com/ron2111/omnitoken v0.1.7
 	github.com/stretchr/testify v1.12.1
 	// Pinned: v1.5.0 is the only echo-swagger release built against echo/v5;
 	// v1.5.1+ switch back to echo/v4. Also ignored in .github/dependabot.yml.

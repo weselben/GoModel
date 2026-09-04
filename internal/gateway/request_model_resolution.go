@@ -144,6 +144,11 @@ func ResolveRequestModelWithAuthorizer(
 	if slowdownResolver, ok := resolver.(ModelSlowdownResolver); ok {
 		resolution.Slowdown = slowdownResolver.ResolveSlowdown(ctx, requested, resolvedSelector)
 	}
+	if repetitionResolver, ok := resolver.(ModelRepetitionResolver); ok {
+		// Per-request repetition guard overrides: nil inherits the global
+		// setting; a non-nil limit of 0 explicitly disables the guard.
+		resolution.RepetitionLimit, resolution.RepetitionMaxPattern = repetitionResolver.ResolveRepetitionLimit(ctx, requested, resolvedSelector)
+	}
 	return resolution, nil
 }
 
