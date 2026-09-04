@@ -32,6 +32,14 @@ import (
 // fenced code, base64/hex blobs, markdown tables, long whitespace runs, and
 // tool_calls/function_call deltas from ever tripping the guard. With limit <= 0
 // the source is returned unchanged, so a disabled guard has zero overhead.
+//
+// Usage accounting limitation: the guard closes the upstream before the
+// provider's final usage chunk arrives, so a triggered stream emits no usage
+// entry even though the provider still bills the emitted tokens. The cut
+// consumes up to limit consecutive repeats of the unit beyond what usage
+// logs show. Synthesizing a usage entry from the emitted deltas would
+// require a callback into the usage observer that the guard does not
+// currently have; until then the accounting gap is documented, not patched.
 type RepetitionGuardStream struct {
 	source          io.ReadCloser
 	limit           int
