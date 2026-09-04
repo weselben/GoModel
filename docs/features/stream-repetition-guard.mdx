@@ -101,3 +101,16 @@ gomodel_stream_repetition_triggers_total{provider="openai", model="gpt-4o"}
 ```
 
 Use it to alert on models that loop often.
+
+## Limitations
+
+When the guard fires, it closes the upstream connection before the
+provider sends its final usage chunk. A triggered stream therefore has no
+usage entry in the logs, even though the provider still bills every token
+it emitted. From the accounting view, the cut consumes up to `limit`
+consecutive repeats of the repeating unit beyond the last recorded usage.
+
+The guard cannot synthesize a usage entry from the emitted deltas: that
+would need a callback into the usage observer that it does not have. If
+exact token accounting matters for a model, alert on the trigger counter
+above and treat its occurrences as unrecorded usage.

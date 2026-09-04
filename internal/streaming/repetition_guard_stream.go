@@ -32,6 +32,14 @@ import (
 // fenced code, base64/hex blobs, markdown tables, long whitespace runs, and
 // tool_calls/function_call deltas from ever tripping the guard. With limit <= 0
 // the source is returned unchanged, so a disabled guard has zero overhead.
+//
+// Usage accounting limitation: the guard closes the upstream before the
+// provider's final usage chunk arrives, so a triggered stream emits no usage
+// entry even though the provider still bills the emitted tokens. The cut
+// consumes up to limit consecutive repeats of the unit beyond what usage
+// logs show. Synthesizing a usage entry from the emitted deltas would
+// require a callback into the usage observer that the guard does not
+// currently have; until then the accounting gap is documented, not patched.
 type RepetitionGuardStream struct {
 	source          io.ReadCloser
 	limit           int
@@ -139,24 +147,6 @@ func NewRepetitionGuardStream(source io.ReadCloser, limit, maxPattern int, model
 	}
 	for _, opt := range opts {
 		opt(g)
-	}
-	return g
-}
-
-// newGuardWithCounter builds the guard with an explicit TokenCounter, bypassing
-// lazy model resolution. A nil counter selects the byte fallback directly.
-func newGuardWithCounter(source io.ReadCloser, limit, maxPattern int, counter TokenCounter) io.ReadCloser {
-	if source == nil || limit <= 0 {
-		return source
-	}
-	limit, maxPattern = clampGuardParams(limit, maxPattern)
-	g := &RepetitionGuardStream{
-		source:          source,
-		limit:           limit,
-		maxPattern:      maxPattern,
-		counter:         counter,
-		counterResolved: true,
-		choices:         make(map[int]*choiceState),
 	}
 	return g
 }
@@ -712,6 +702,13 @@ func contentDeltas(payload map[string]any) []struct {
 		if !ok {
 			continue
 		}
+		// Key the guard state by the choice's own index, not its position
+		// in the choices array; the two differ only for out-of-order
+		// choice delivery, which OpenAI permits.
+		choiceIndex := i
+		if idx, ok := choiceMap["index"].(float64); ok {
+			choiceIndex = int(idx)
+		}
 		delta, ok := choiceMap["delta"].(map[string]any)
 		if !ok {
 			continue
@@ -737,7 +734,7 @@ func contentDeltas(payload map[string]any) []struct {
 		out = append(out, struct {
 			choiceIndex int
 			content     []byte
-		}{choiceIndex: i, content: []byte(content)})
+		}{choiceIndex: choiceIndex, content: []byte(content)})
 	}
 	return out
 }
