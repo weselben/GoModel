@@ -25,18 +25,33 @@ func (s *Service) ResolveRepetitionLimit(
 
 	snap := s.snapshot()
 	userPath := core.UserPathFromContext(ctx)
+
+	var policy VirtualModel
+	policyOK := false
+	if p, ok := snap.matchingPolicy(resolved.Provider, resolved.Model); ok && userPathAllowed(userPath, p.UserPaths) {
+		policy, policyOK = p, true
+	}
+
 	if !requested.ExplicitProvider {
 		if redirect, ok := snap.findRedirect(requested.Model, userPath, true); ok {
-			// An alias that pins at least one of the pair short-circuits: the
-			// fields travel as a unit, so an explicit alias does not merge with
-			// a policy's values. Nil siblings keep inheriting downstream.
-			if redirect.vm.RepetitionLimit != nil || redirect.vm.RepetitionMaxPattern != nil {
-				return redirect.vm.RepetitionLimit, redirect.vm.RepetitionMaxPattern
+			limit, maxPattern := redirect.vm.RepetitionLimit, redirect.vm.RepetitionMaxPattern
+			if limit != nil || maxPattern != nil {
+				// Each field independently inherits: nil alias fields are
+				// filled from the matching policy before returning.
+				if policyOK {
+					if limit == nil {
+						limit = policy.RepetitionLimit
+					}
+					if maxPattern == nil {
+						maxPattern = policy.RepetitionMaxPattern
+					}
+				}
+				return limit, maxPattern
 			}
 		}
 	}
 
-	if policy, ok := snap.matchingPolicy(resolved.Provider, resolved.Model); ok && userPathAllowed(userPath, policy.UserPaths) {
+	if policyOK {
 		return policy.RepetitionLimit, policy.RepetitionMaxPattern
 	}
 	return nil, nil

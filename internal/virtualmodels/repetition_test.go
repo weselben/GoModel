@@ -68,6 +68,29 @@ func TestResolveRepetitionLimit(t *testing.T) {
 			wantMaxPattern: new(6),
 		},
 		{
+			name: "alias pins limit only, inherits max_pattern from policy",
+			rows: []VirtualModel{
+				{
+					Source:          "half-alias",
+					Targets:         []Target{{Provider: "openai", Model: "gpt-4o"}},
+					RepetitionLimit: new(4),
+					Enabled:         true,
+				},
+				{
+					Source:               "openai/gpt-4o",
+					ProviderName:         "openai",
+					Model:                "gpt-4o",
+					RepetitionLimit:      new(2),
+					RepetitionMaxPattern: new(6),
+					Enabled:              true,
+				},
+			},
+			requested:      core.NewRequestedModelSelector("half-alias", ""),
+			resolved:       core.ModelSelector{Provider: "openai", Model: "gpt-4o"},
+			wantLimit:      new(4),
+			wantMaxPattern: new(6),
+		},
+		{
 			name: "explicit alias limit zero is an override, not inherit",
 			rows: []VirtualModel{
 				{
