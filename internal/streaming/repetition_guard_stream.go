@@ -50,6 +50,7 @@ type RepetitionGuardStream struct {
 	closeOnce  sync.Once
 	closeErr   error
 	onTrigger  func()
+	zeroReads  int
 
 	// Envelope of the last observed chunk, echoed into the synthetic
 	// terminal chunk so the cut looks like a normal upstream finish.
@@ -109,6 +110,11 @@ const (
 
 	// Encoded-blob heuristic window (base64/hex density + entropy).
 	encodedWindowBytes = 64
+
+	// maxConsecutiveZeroReads caps how many (0, nil) source reads the
+	// guard tolerates before surfacing io.ErrNoProgress, matching the
+	// stdlib io.Copy busy-spin cutoff.
+	maxConsecutiveZeroReads = 100
 )
 
 // NewRepetitionGuardStream returns source unchanged when limit is zero or
@@ -184,6 +190,7 @@ func (s *RepetitionGuardStream) Read(p []byte) (int, error) {
 		}
 		n, err := s.source.Read(s.scratch)
 		if n > 0 {
+			s.zeroReads = 0
 			s.observe(s.scratch[:n])
 			continue
 		}
@@ -198,9 +205,14 @@ func (s *RepetitionGuardStream) Read(p []byte) (int, error) {
 			s.sourceDone = true
 			return 0, err
 		}
-		if n == 0 {
-			return 0, nil
+		// (0, nil): the source made no progress and reported no error.
+		// Surface io.ErrNoProgress after repeated empty reads so io.Copy
+		// callers cannot busy-spin on a stalled source.
+		s.zeroReads++
+		if s.zeroReads >= maxConsecutiveZeroReads {
+			return 0, io.ErrNoProgress
 		}
+		return 0, nil
 	}
 }
 
@@ -632,32 +644,8 @@ func byteRunLength(tail []byte, p int) int {
 	}
 	return run
 }
-
-// detectRun is the simplified byte-period detector used by tests and kept for
-// direct inspection: it reports whether tail ends in a periodic run with
-// period <= fallbackMaxUnitBytes that repeats limit times and spans at least
-// fallbackMinRunBytes.
-func detectRun(tail []byte, limit int) bool {
-	for p := 1; p <= fallbackMaxUnitBytes; p++ {
-		need := p * limit
-		if len(tail) < need {
-			break
-		}
-		if !byteTailRepeats(tail, p, need) {
-			continue
-		}
-		if run := byteRunLength(tail, p); run >= need && run >= fallbackMinRunBytes {
-			return true
-		}
-	}
-	return false
-}
-
 var codeFenceMarker = []byte("```")
 
-// contentDeltas extracts choices[].delta.content string values from a decoded
-// chat-completion payload. Deltas carrying tool_calls or function_call are
-// never inspected and therefore never returned.
 // contentDeltas extracts (choiceIndex, text) pairs from a decoded SSE
 // payload across the three supported wire shapes:
 //
