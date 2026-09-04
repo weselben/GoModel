@@ -3,6 +3,7 @@ package streaming
 import (
 	"bytes"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 	"testing"
@@ -491,6 +492,7 @@ func TestClampGuardParams(t *testing.T) {
 		{2, 1, 2, 1},
 		{2, 64, 2, 64},
 		{10, -3, 10, 8},
+		{math.MaxInt, 8, math.MaxInt / 64, 8},
 	}
 	for _, tc := range cases {
 		gotLimit, gotPattern := clampGuardParams(tc.inLimit, tc.inPattern)
@@ -498,6 +500,24 @@ func TestClampGuardParams(t *testing.T) {
 			t.Fatalf("clampGuardParams(%d,%d) = (%d,%d), want (%d,%d)",
 				tc.inLimit, tc.inPattern, gotLimit, gotPattern, tc.wantLimit, tc.wantPattern)
 		}
+	}
+}
+
+// TestRepetitionGuardStream_ForwardsUnterminatedFinalEvent verifies that a
+// source ending without the blank-line separator after its last data payload
+// still delivers those buffered bytes: the client must not lose the final
+// delta just because the upstream stream ended mid-event.
+func TestRepetitionGuardStream_ForwardsUnterminatedFinalEvent(t *testing.T) {
+	finalEvent := chatEvent("tail") // no trailing "\n\n", no [DONE]
+	src := newSource(finalEvent)
+	stream := NewRepetitionGuardStream(src, 3, 8, "gpt-4o")
+
+	got, err := io.ReadAll(stream)
+	if err != nil {
+		t.Fatalf("ReadAll error: %v", err)
+	}
+	if !bytes.Equal(got, []byte(finalEvent)) {
+		t.Fatalf("got %q, want the buffered final event %q", got, finalEvent)
 	}
 }
 
