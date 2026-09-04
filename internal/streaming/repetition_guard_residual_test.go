@@ -198,12 +198,15 @@ func TestNewTokenCounter_ForEncodingError(t *testing.T) {
 	const fakeEncoding = "kimi-test-failing-encoding"
 	const fakeModel = "kimi-test-fake-encoding-model"
 
+	// Idempotent under -count>1: a previous run may already have registered
+	// these names in omnitoken's global registry; re-registering is a
+	// conflict error, not a setup failure.
 	if err := omnitoken.RegisterEncoding(fakeEncoding, func() (omnitoken.ModelEngine, error) {
 		return nil, errors.New("engine build failed")
-	}); err != nil {
+	}); err != nil && !strings.Contains(err.Error(), "already registered") {
 		t.Fatalf("RegisterEncoding: %v", err)
 	}
-	if err := omnitoken.RegisterModel(fakeModel, fakeEncoding); err != nil {
+	if err := omnitoken.RegisterModel(fakeModel, fakeEncoding); err != nil && !strings.Contains(err.Error(), "already registered") {
 		t.Fatalf("RegisterModel: %v", err)
 	}
 	counter, err := NewTokenCounter(fakeModel)
