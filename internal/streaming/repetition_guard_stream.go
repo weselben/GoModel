@@ -60,6 +60,10 @@ type RepetitionGuardStream struct {
 	onTrigger  func()
 	zeroReads  int
 
+	// mu serializes Close against Read: Close tears down closed/out/pending
+	// while a drain goroutine may still be serving or observing bytes.
+	mu sync.Mutex
+
 	// Envelope of the last observed chunk, echoed into the synthetic
 	// terminal chunk so the cut looks like a normal upstream finish.
 	envSeen    bool
@@ -169,30 +173,44 @@ func (s *RepetitionGuardStream) Read(p []byte) (int, error) {
 		return 0, nil
 	}
 	for {
+		s.mu.Lock()
 		if s.out.Len() > 0 {
-			return s.out.Read(p), nil
+			n := s.out.Read(p)
+			s.mu.Unlock()
+			return n, nil
 		}
 		if s.triggered || s.sourceDone || s.closed {
+			s.mu.Unlock()
 			return 0, io.EOF
 		}
 		if s.scratch == nil {
 			s.scratch = make([]byte, 32*1024)
 		}
-		n, err := s.source.Read(s.scratch)
+		scratch := s.scratch
+		s.mu.Unlock()
+
+		// The source read blocks, so it runs outside the mutex; Close may
+		// be waiting on the mutex while this goroutine is blocked here.
+		n, err := s.source.Read(scratch)
+
+		s.mu.Lock()
 		if n > 0 {
 			s.zeroReads = 0
-			s.observe(s.scratch[:n])
+			s.observe(scratch[:n])
+			s.mu.Unlock()
 			continue
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				s.sourceDone = true
 				if n == 0 {
+					s.mu.Unlock()
 					return 0, io.EOF
 				}
 			}
 			s.readErr = err
 			s.sourceDone = true
+			s.mu.Unlock()
 			return 0, err
 		}
 		// (0, nil): the source made no progress and reported no error.
@@ -200,20 +218,26 @@ func (s *RepetitionGuardStream) Read(p []byte) (int, error) {
 		// callers cannot busy-spin on a stalled source.
 		s.zeroReads++
 		if s.zeroReads >= maxConsecutiveZeroReads {
+			s.mu.Unlock()
 			return 0, io.ErrNoProgress
 		}
+		s.mu.Unlock()
 		return 0, nil
 	}
 }
 
 // Close idempotently closes the upstream source. It is safe to call after a
 // repetition trigger (the source is already closed) and returns the recorded
-// close error on repeat calls.
+// close error on repeat calls. Close is safe to call concurrently with Read:
+// the upstream close happens outside the mutex (so a Read blocked in the
+// source is unblocked) and the state teardown runs under it.
 func (s *RepetitionGuardStream) Close() error {
-	s.closed = true
 	_ = s.closeSource()
+	s.mu.Lock()
+	s.closed = true
 	s.out.Release()
 	s.pending = nil
+	s.mu.Unlock()
 	return s.closeErr
 }
 
