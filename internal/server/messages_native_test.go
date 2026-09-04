@@ -91,6 +91,90 @@ func TestMessages_NativeStreamingLogsUsage(t *testing.T) {
 	}
 }
 
+// An alias carrying a repetition_limit override must pin its own stream
+// repetition guard on the native /v1/messages path, overriding the global
+// service default instead of silently dropping the override the way the
+// translated chat/responses paths once did.
+func TestMessagesNativeRepetitionOverride(t *testing.T) {
+	zero, five, twelve := 0, 5, 12
+	tests := []struct {
+		name           string
+		globalLimit    int
+		globalMax      int
+		workflow       *core.Workflow
+		wantLimit      int
+		wantMaxPattern int
+	}{
+		{
+			name:           "nil overrides inherit global",
+			globalLimit:    10,
+			globalMax:      8,
+			workflow:       &core.Workflow{Resolution: &core.RequestModelResolution{}},
+			wantLimit:      10,
+			wantMaxPattern: 8,
+		},
+		{
+			name:        "alias repetition_limit overrides global",
+			globalLimit: 10,
+			globalMax:   8,
+			workflow: &core.Workflow{Resolution: &core.RequestModelResolution{
+				RepetitionLimit:      &five,
+				RepetitionMaxPattern: &twelve,
+			}},
+			wantLimit:      5,
+			wantMaxPattern: 12,
+		},
+		{
+			name:        "override limit zero disables guard for request",
+			globalLimit: 10,
+			globalMax:   8,
+			workflow: &core.Workflow{Resolution: &core.RequestModelResolution{
+				RepetitionLimit: &zero,
+			}},
+			wantLimit:      0,
+			wantMaxPattern: 8,
+		},
+		{
+			name:        "maxPattern-only override keeps global limit active",
+			globalLimit: 10,
+			globalMax:   8,
+			workflow: &core.Workflow{Resolution: &core.RequestModelResolution{
+				RepetitionMaxPattern: &twelve,
+			}},
+			wantLimit:      10,
+			wantMaxPattern: 12,
+		},
+		{
+			name:           "nil workflow falls back to global",
+			globalLimit:    7,
+			globalMax:      6,
+			workflow:       nil,
+			wantLimit:      7,
+			wantMaxPattern: 6,
+		},
+		{
+			name:           "nil resolution falls back to global",
+			globalLimit:    4,
+			globalMax:      9,
+			workflow:       &core.Workflow{},
+			wantLimit:      4,
+			wantMaxPattern: 9,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotLimit, gotMax := effectiveMessagesNativeRepetition(tt.workflow, tt.globalLimit, tt.globalMax)
+			if gotLimit != tt.wantLimit {
+				t.Fatalf("limit = %d, want %d", gotLimit, tt.wantLimit)
+			}
+			if gotMax != tt.wantMaxPattern {
+				t.Fatalf("maxPattern = %d, want %d", gotMax, tt.wantMaxPattern)
+			}
+		})
+	}
+}
+
 // A forwarded Accept-Encoding would make the upstream body arrive compressed,
 // blinding the SSE usage and audit observers; it must be stripped so the
 // transport decompresses transparently.
