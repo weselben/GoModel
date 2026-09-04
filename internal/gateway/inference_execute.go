@@ -36,20 +36,14 @@ func (o *InferenceOrchestrator) DispatchChatCompletion(
 }
 
 // resolveEffectiveRepetition selects the stream repetition-guard settings for
-// this request. Each workflow override field independently wins when set: an
-// explicit limit of 0 disables the guard for this request, while unset fields
+// this request: workflow override fields win independently, unset fields
 // inherit the orchestrator global/default.
 func (o *InferenceOrchestrator) resolveEffectiveRepetition(workflow *core.Workflow) (limit, maxPattern int) {
-	limit = o.streamRepetitionLimit
-	maxPattern = o.streamRepetitionMaxPattern
-	overrideLimit, overrideMax, limitSet, maxSet := workflowRepetition(workflow)
-	if limitSet {
-		limit = overrideLimit
+	var resolution *core.RequestModelResolution
+	if workflow != nil {
+		resolution = workflow.Resolution
 	}
-	if maxSet {
-		maxPattern = overrideMax
-	}
-	return limit, maxPattern
+	return core.ResolveRepetitionWithDefaults(resolution, o.streamRepetitionLimit, o.streamRepetitionMaxPattern)
 }
 
 // StreamChatCompletion opens a chat SSE stream. Stream usage is recorded by the caller's stream observer.

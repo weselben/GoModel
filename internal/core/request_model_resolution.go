@@ -29,6 +29,24 @@ func (r *RequestModelResolution) RequestedQualifiedModel() string {
 	return r.Requested.RequestedQualifiedModel()
 }
 
+// ResolveRepetitionWithDefaults applies per-request repetition-guard overrides
+// on top of service-level defaults. Each override field independently wins
+// when set: an explicit limit of 0 disables the guard for the request while
+// unset fields inherit the default. A nil resolution is transparent.
+func ResolveRepetitionWithDefaults(resolution *RequestModelResolution, defaultLimit, defaultMaxPattern int) (limit, maxPattern int) {
+	limit, maxPattern = defaultLimit, defaultMaxPattern
+	if resolution == nil {
+		return limit, maxPattern
+	}
+	if v := resolution.RepetitionLimit; v != nil {
+		limit = *v
+	}
+	if v := resolution.RepetitionMaxPattern; v != nil {
+		maxPattern = *v
+	}
+	return limit, maxPattern
+}
+
 // ResolvedQualifiedModel returns the concrete qualified model selected for execution.
 func (r *RequestModelResolution) ResolvedQualifiedModel() string {
 	if r == nil {

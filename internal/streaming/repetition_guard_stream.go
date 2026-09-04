@@ -60,17 +60,17 @@ type RepetitionGuardStream struct {
 	onTrigger  func()
 	zeroReads  int
 
-	// mu serializes Close against Read: Close tears down closed/out/pending
-	// while a drain goroutine may still be serving or observing bytes.
 	mu sync.Mutex
 
-	// Envelope of the last observed chunk, echoed into the synthetic
-	// terminal chunk so the cut looks like a normal upstream finish.
-	envSeen    bool
-	envID      string
-	envObject  string
-	envModel   string
-	envCreated float64
+	// sawJSONEvent tracks that at least one JSON event has been decoded from
+	// the stream; the trigger() chat-completions branch emits the synthetic
+	// terminal chunk only when it saw one, so streams that never spoke JSON
+	// (plain test payloads) end with just the done marker.
+	sawJSONEvent bool
+	envID        string
+	envObject    string
+	envModel     string
+	envCreated   float64
 
 	// dialect pins the stream shape (chat completions, Anthropic messages,
 	// or the Responses API) from the first recognizable event; the
@@ -201,12 +201,11 @@ func (s *RepetitionGuardStream) Read(p []byte) (int, error) {
 			continue
 		}
 		if err != nil {
+			// n == 0 here: the n > 0 branch above never reaches this one.
 			if errors.Is(err, io.EOF) {
 				s.sourceDone = true
-				if n == 0 {
-					s.mu.Unlock()
-					return 0, io.EOF
-				}
+				s.mu.Unlock()
+				return 0, io.EOF
 			}
 			s.readErr = err
 			s.sourceDone = true
@@ -402,13 +401,13 @@ func (s *RepetitionGuardStream) inspectDelta(index int, content []byte) bool {
 // captureEnvelope remembers id/object/created/model from the latest decoded
 // chunk so the synthetic terminal chunk indistinguishably completes the
 // same conversation, and pins the stream dialect from the payload shape so
-// trigger() can speak the right wire protocol. Envelope-less test payloads
-// fall back to a minimal chunk carrying only choices.
+// trigger() can speak the right wire protocol. Every call also flips
+// sawJSONEvent so trigger() knows at least one JSON event has been seen.
 func (s *RepetitionGuardStream) captureEnvelope(decoded map[string]any) {
 	if s.dialect == dialectUnknown {
 		s.dialect = detectDialect(decoded)
 	}
-	s.envSeen = true
+	s.sawJSONEvent = true
 	// Responses API events nest the envelope under "response".
 	envelope := decoded
 	if inner, ok := decoded["response"].(map[string]any); ok {
@@ -516,7 +515,7 @@ func (s *RepetitionGuardStream) trigger(index int) {
 		s.out.AppendBytes(s.responsesCompletedPayload())
 		s.out.AppendBytes(lfEventBoundary)
 	default:
-		if s.envSeen {
+		if s.sawJSONEvent {
 			s.out.AppendString("data: ")
 			s.out.AppendBytes(s.terminalChunk(index))
 			s.out.AppendBytes(lfEventBoundary)
