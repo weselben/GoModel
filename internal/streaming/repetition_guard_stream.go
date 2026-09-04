@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -244,13 +245,16 @@ func (s *RepetitionGuardStream) observe(data []byte) {
 		}
 
 		event := s.pending[:idx]
+		sep := s.pending[idx : idx+sepLen]
 		s.pending = s.pending[idx+sepLen:]
 		if len(event) == 0 {
 			continue
 		}
 
+		// Re-append the matched separator so a CRLF upstream stream passes
+		// through byte-identical; we never replace it with the LF constant.
 		s.out.AppendBytes(event)
-		s.out.AppendBytes(lfEventBoundary)
+		s.out.AppendBytes(sep)
 		s.inspectEvent(event)
 		if s.triggered {
 			s.pending = s.pending[:0]
@@ -452,7 +456,7 @@ func (s *RepetitionGuardStream) terminalChunk(index int) []byte {
 //   - Chat completions: terminal chunk with finish_reason "stop", then
 //     data: [DONE] — mirrors a successful upstream stream.
 //   - Anthropic messages: message_delta with stop_reason "end_turn"
-//     (usage echoed from the last seen delta when known), then
+//     (no usage key — the guard cannot know the real token count), then
 //     message_stop. No [DONE] marker — Anthropic streams end at
 //     message_stop.
 //   - Responses API: response.completed with status "completed" and the
@@ -467,8 +471,15 @@ func (s *RepetitionGuardStream) trigger(index int) {
 
 	switch s.dialect {
 	case dialectAnthropicMessages:
+		// Close the still-open text block first: strict Anthropic clients
+		// track per-block state and hang on an unclosed content_block.
+		s.out.AppendString("event: content_block_stop\n")
+		s.out.AppendString(`data: {"type":"content_block_stop","index":`)
+		s.out.AppendString(strconv.Itoa(index))
+		s.out.AppendString("}")
+		s.out.AppendBytes(lfEventBoundary)
 		s.out.AppendString("event: message_delta\n")
-		s.out.AppendString(`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":0}}`)
+		s.out.AppendString(`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}`)
 		s.out.AppendBytes(lfEventBoundary)
 		s.out.AppendString("event: message_stop\n")
 		s.out.AppendString(`data: {"type":"message_stop"}`)

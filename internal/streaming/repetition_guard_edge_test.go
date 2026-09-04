@@ -41,6 +41,33 @@ func TestEdge_CRLFStreamLoop(t *testing.T) {
 	}
 }
 
+// TestEdge_CRLFPassthroughByteIdentical — a clean CRLF stream must reach
+// the caller byte-for-byte; the guard forwards complete events without
+// rewriting the separator (\r\n\r\n stays \r\n\r\n, never \n\n).
+func TestEdge_CRLFPassthroughByteIdentical(t *testing.T) {
+	chunk := func(content string) string {
+		return "data: {\"choices\":[{\"delta\":{\"content\":\"" + content + "\"}}]}\r\n\r\n"
+	}
+	body := chunk("hello ") + chunk("world")
+
+	src := newSource(body)
+	sink := &counterSink{}
+	stream := NewRepetitionGuardStream(src, 3, 8, "some-unknown-model", WithTriggerCallback(sink.inc))
+	out, err := io.ReadAll(stream)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if string(out) != body {
+		t.Fatalf("CRLF passthrough altered the stream\nwant: %q\ngot:  %q", body, string(out))
+	}
+	if sink.n.Load() != 0 {
+		t.Fatalf("trigger fired on clean CRLF stream")
+	}
+}
+
 // TestEdge_UsageFinalChunkPasses — OpenAI streams requested with
 // stream_options.include_usage end with a choices:[] chunk carrying usage.
 // It has no delta content, so the guard forwards it untouched.
