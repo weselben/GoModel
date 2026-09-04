@@ -1,6 +1,9 @@
 package config
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // RetryConfig holds resolved retry settings for an LLM client.
 // This is the canonical type shared between config and llmclient.
@@ -56,6 +59,17 @@ type ResilienceConfig struct {
 	// the repetition guard considers as one repeating unit. 0 selects the
 	// built-in default (8).
 	StreamRepetitionMaxPattern int `yaml:"stream_repetition_max_pattern" env:"STREAM_REPETITION_MAX_PATTERN"`
+}
+
+// validateStreamRepetitionConfig rejects global repetition-guard settings that
+// would silently clamp later. A limit of 1 is meaningless — the guard clamps
+// it to the minimum of 2 — so it is a config error here, matching the
+// per-virtual-model rule in internal/virtualmodels/validation.go.
+func validateStreamRepetitionConfig(cfg *ResilienceConfig) error {
+	if cfg.StreamRepetitionLimit == 1 {
+		return fmt.Errorf("resilience.stream_repetition_limit must be 0 (disabled) or at least 2, got 1")
+	}
+	return nil
 }
 
 // RawResilienceConfig holds optional per-provider resilience overrides from YAML.
