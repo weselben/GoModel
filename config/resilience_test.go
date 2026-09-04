@@ -19,6 +19,29 @@ func TestValidateStreamRepetitionConfigRejectsLimitOne(t *testing.T) {
 	if err := validateStreamRepetitionConfig(&cfg.Resilience); err != nil {
 		t.Fatalf("limit 3 must be valid, got %v", err)
 	}
+
+	cfg.Resilience.StreamRepetitionLimit = -1
+	if err := validateStreamRepetitionConfig(&cfg.Resilience); err == nil {
+		t.Fatalf("expected error for stream_repetition_limit = -1, got nil")
+	}
+	cfg.Resilience.StreamRepetitionLimit = 0
+
+	cfg.Resilience.StreamRepetitionMaxPattern = -1
+	if err := validateStreamRepetitionConfig(&cfg.Resilience); err == nil {
+		t.Fatalf("expected error for stream_repetition_max_pattern = -1, got nil")
+	}
+	cfg.Resilience.StreamRepetitionMaxPattern = 65
+	if err := validateStreamRepetitionConfig(&cfg.Resilience); err == nil {
+		t.Fatalf("expected error for stream_repetition_max_pattern = 65, got nil")
+	}
+	cfg.Resilience.StreamRepetitionMaxPattern = 0
+	if err := validateStreamRepetitionConfig(&cfg.Resilience); err != nil {
+		t.Fatalf("max_pattern 0 (default) must be valid, got %v", err)
+	}
+	cfg.Resilience.StreamRepetitionMaxPattern = 64
+	if err := validateStreamRepetitionConfig(&cfg.Resilience); err != nil {
+		t.Fatalf("max_pattern 64 must be valid, got %v", err)
+	}
 }
 
 func TestLoadRejectsStreamRepetitionLimitOneViaEnv(t *testing.T) {

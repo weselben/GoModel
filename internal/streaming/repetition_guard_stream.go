@@ -159,6 +159,11 @@ func clampGuardParams(limit, maxPattern int) (int, int) {
 	if limit < minLimit {
 		limit = minLimit
 	}
+	// Cap limit so limit*maxPattern (detectTokenRun) and
+	// fallbackMaxUnitBytes*limit (detectByteRun) never overflow int.
+	if limit > math.MaxInt/maxMaxPattern {
+		limit = math.MaxInt / maxMaxPattern
+	}
 	if maxPattern <= 0 {
 		maxPattern = defaultMaxPattern
 	}
@@ -203,6 +208,16 @@ func (s *RepetitionGuardStream) Read(p []byte) (int, error) {
 		if err != nil {
 			// n == 0 here: the n > 0 branch above never reaches this one.
 			if errors.Is(err, io.EOF) {
+				if len(s.pending) > 0 {
+					// The source ended mid-event (no blank-line separator
+					// after the final payload): forward the buffered bytes
+					// before reporting EOF so the client never loses the
+					// last delta.
+					s.out.AppendBytes(s.pending)
+					s.pending = s.pending[:0]
+					s.mu.Unlock()
+					continue
+				}
 				s.sourceDone = true
 				s.mu.Unlock()
 				return 0, io.EOF
