@@ -694,6 +694,13 @@ func contentDeltas(payload map[string]any) []struct {
 		if !ok {
 			continue
 		}
+		// Key the guard state by the choice's own index, not its position
+		// in the choices array; the two differ only for out-of-order
+		// choice delivery, which OpenAI permits.
+		choiceIndex := i
+		if idx, ok := choiceMap["index"].(float64); ok {
+			choiceIndex = int(idx)
+		}
 		delta, ok := choiceMap["delta"].(map[string]any)
 		if !ok {
 			continue
@@ -719,7 +726,7 @@ func contentDeltas(payload map[string]any) []struct {
 		out = append(out, struct {
 			choiceIndex int
 			content     []byte
-		}{choiceIndex: i, content: []byte(content)})
+		}{choiceIndex: choiceIndex, content: []byte(content)})
 	}
 	return out
 }
