@@ -8,6 +8,8 @@ import (
 	"github.com/enterpilot/gomodel/internal/core"
 )
 
+func newInt(value int) *int { return &value }
+
 func TestResolveSlowdown(t *testing.T) {
 	concrete := VirtualModel{
 		Source:       "openai/gpt-4o",
@@ -127,6 +129,48 @@ func TestUpsertValidatesSlowdown(t *testing.T) {
 				Source:   tt.source,
 				Slowdown: tt.slowdown,
 				Enabled:  true,
+			})
+			if tt.wantInvalid {
+				if err == nil || !IsValidationError(err) {
+					t.Fatalf("Upsert() error = %v, want validation error", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Upsert() error = %v, want nil", err)
+			}
+		})
+	}
+}
+
+func TestUpsertValidatesRepetitionGuard(t *testing.T) {
+	tests := []struct {
+		name                 string
+		repetitionLimit      *int
+		repetitionMaxPattern *int
+		wantInvalid          bool
+	}{
+		{name: "nil inherits", repetitionLimit: nil, repetitionMaxPattern: nil},
+		{name: "limit 0 valid (explicit off)", repetitionLimit: newInt(0), repetitionMaxPattern: newInt(8)},
+		{name: "limit 3 and max 8", repetitionLimit: newInt(3), repetitionMaxPattern: newInt(8)},
+		{name: "limit -1 rejected", repetitionLimit: newInt(-1), repetitionMaxPattern: newInt(8), wantInvalid: true},
+		{name: "limit 1 rejected (clamped to minLimit=2)", repetitionLimit: newInt(1), repetitionMaxPattern: newInt(8), wantInvalid: true},
+		{name: "max_pattern 1 valid", repetitionLimit: newInt(3), repetitionMaxPattern: newInt(1)},
+		{name: "max_pattern 64 valid", repetitionLimit: newInt(3), repetitionMaxPattern: newInt(64)},
+		{name: "max_pattern 0 rejected", repetitionLimit: newInt(3), repetitionMaxPattern: newInt(0), wantInvalid: true},
+		{name: "max_pattern 65 rejected", repetitionLimit: newInt(3), repetitionMaxPattern: newInt(65), wantInvalid: true},
+		{name: "only limit set valid", repetitionLimit: newInt(5), repetitionMaxPattern: nil},
+		{name: "only max_pattern set valid", repetitionLimit: nil, repetitionMaxPattern: newInt(4)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service := newSlowdownService(t)
+			err := service.Upsert(context.Background(), VirtualModel{
+				Source:               "openai/gpt-4o",
+				RepetitionLimit:      tt.repetitionLimit,
+				RepetitionMaxPattern: tt.repetitionMaxPattern,
+				Enabled:              true,
 			})
 			if tt.wantInvalid {
 				if err == nil || !IsValidationError(err) {

@@ -73,6 +73,82 @@ func TestConfigModels_PreservesSlowdownPresence(t *testing.T) {
 	}
 }
 
+// Repetition-guard fields are operator-authored through config.yaml and the
+// admin API. Round-tripping them through Refresh confirms the normalize path
+// preserves the explicit pair (limit=0 means "off", nil means "inherit"). The
+// "omitted" case is intentionally absent: a policy with no fields is exactly
+// what the redundancy short-circuit is designed to drop, so it does not
+// round-trip through Upsert by design — it stays as the inherited default.
+func TestConfigModels_PreservesRepetitionPresence(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name                 string
+		repetitionLimit      *int
+		repetitionMaxPattern *int
+		wantLimit            *int
+		wantMax              *int
+	}{
+		{name: "explicit disabled limit", repetitionLimit: new(0), repetitionMaxPattern: new(8), wantLimit: new(0), wantMax: new(8)},
+		{name: "active pair", repetitionLimit: new(3), repetitionMaxPattern: new(8), wantLimit: new(3), wantMax: new(8)},
+		{name: "limit only", repetitionLimit: new(5), repetitionMaxPattern: nil, wantLimit: new(5), wantMax: nil},
+		{name: "max only", repetitionLimit: nil, repetitionMaxPattern: new(4), wantLimit: nil, wantMax: new(4)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := newBalancingService(t)
+			ctx := context.Background()
+			vm := VirtualModel{
+				Source:               "openai/gpt-4o",
+				ProviderName:         "openai",
+				Model:                "gpt-4o",
+				RepetitionLimit:      tt.repetitionLimit,
+				RepetitionMaxPattern: tt.repetitionMaxPattern,
+				Enabled:              true,
+			}
+			if err := svc.Upsert(ctx, vm); err != nil {
+				t.Fatalf("Upsert() error = %v", err)
+			}
+			got, ok := svc.Get("openai/gpt-4o")
+			if !ok {
+				t.Fatalf("Get(openai/gpt-4o) missing after Upsert")
+			}
+			if !intPtrEqual(got.RepetitionLimit, tt.wantLimit) {
+				t.Fatalf("RepetitionLimit = %v, want %v", got.RepetitionLimit, tt.wantLimit)
+			}
+			if !intPtrEqual(got.RepetitionMaxPattern, tt.wantMax) {
+				t.Fatalf("RepetitionMaxPattern = %v, want %v", got.RepetitionMaxPattern, tt.wantMax)
+			}
+		})
+	}
+}
+
+// A config-declared virtual model with no repetition fields still produces a
+// VirtualModel with both pointer fields nil — the overlay path is purely
+// in-memory and does not go through the Upsert redundancy check.
+func TestConfigModels_RepetitionOmittedProducesNilPointers(t *testing.T) {
+	t.Parallel()
+	got := ConfigModels([]config.VirtualModelConfig{{
+		Source: "alias", Target: "openai/gpt-4o",
+	}})
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1", len(got))
+	}
+	if got[0].RepetitionLimit != nil || got[0].RepetitionMaxPattern != nil {
+		t.Fatalf("ConfigModels populated repetition fields without source: %#v", got[0])
+	}
+}
+
+func intPtrEqual(a, b *int) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
+}
+
 func TestService_ConfigOverlayResolvesAndIsReadOnly(t *testing.T) {
 	t.Parallel()
 	svc := newBalancingService(t)

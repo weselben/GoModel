@@ -26,16 +26,18 @@ func configModel(entry config.VirtualModelConfig) VirtualModel {
 		enabled = *entry.Enabled
 	}
 	return VirtualModel{
-		Source:          entry.Source,
-		Strategy:        entry.Strategy,
-		SessionAffinity: entry.SessionAffinity,
-		Failover:        entry.Failover,
-		Targets:         configTargets(entry),
-		UserPaths:       entry.UserPaths,
-		Description:     entry.Description,
-		Slowdown:        entry.Slowdown,
-		Enabled:         enabled,
-		Managed:         true,
+		Source:               entry.Source,
+		Strategy:             entry.Strategy,
+		SessionAffinity:      entry.SessionAffinity,
+		Failover:             entry.Failover,
+		Targets:              configTargets(entry),
+		UserPaths:            entry.UserPaths,
+		Description:          entry.Description,
+		Slowdown:             entry.Slowdown,
+		RepetitionLimit:      entry.RepetitionLimit,
+		RepetitionMaxPattern: entry.RepetitionMaxPattern,
+		Enabled:              enabled,
+		Managed:              true,
 	}
 }
 

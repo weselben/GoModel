@@ -53,7 +53,15 @@ type VirtualModel struct {
 	// Slowdown is an extra-time factor from 0.1 to 10; zero disables it. Nil
 	// leaves the setting unspecified so an alias can inherit its target model.
 	Slowdown *float64 `json:"slowdown,omitempty" bson:"slowdown,omitempty"`
-	Enabled  bool     `json:"enabled" bson:"enabled"`
+	// RepetitionLimit aborts a chat SSE stream when the same text unit repeats
+	// this many times consecutively. Nil inherits; 0 disables the guard; values
+	// below 0 are rejected.
+	RepetitionLimit *int `json:"repetition_limit,omitempty" bson:"repetition_limit,omitempty"`
+	// RepetitionMaxPattern is the maximum chain length in tokens that the
+	// repetition guard considers as one repeating unit. Nil inherits; values
+	// outside 1..64 are rejected.
+	RepetitionMaxPattern *int `json:"repetition_max_pattern,omitempty" bson:"repetition_max_pattern,omitempty"`
+	Enabled              bool `json:"enabled" bson:"enabled"`
 
 	// SessionAffinity keeps requests of one detected session on the target that
 	// served it before, while that target stays available. Tri-state: nil means
@@ -132,6 +140,14 @@ func (v VirtualModel) clone() VirtualModel {
 		slowdown := *v.Slowdown
 		v.Slowdown = &slowdown
 	}
+	if v.RepetitionLimit != nil {
+		limit := *v.RepetitionLimit
+		v.RepetitionLimit = &limit
+	}
+	if v.RepetitionMaxPattern != nil {
+		maxPattern := *v.RepetitionMaxPattern
+		v.RepetitionMaxPattern = &maxPattern
+	}
 	if len(v.Targets) > 0 {
 		v.Targets = append([]Target(nil), v.Targets...)
 	}
@@ -168,15 +184,21 @@ type View struct {
 	UserPaths       []string `json:"user_paths,omitempty"`
 	Description     string   `json:"description,omitempty"`
 	// Slowdown is an extra-time factor from 0.1 to 10; zero disables it.
-	Slowdown      *float64  `json:"slowdown,omitempty"`
-	Enabled       bool      `json:"enabled"`
-	Managed       bool      `json:"managed,omitempty"`
-	ResolvedModel string    `json:"resolved_model,omitempty"`
-	ProviderType  string    `json:"provider_type,omitempty"`
-	Valid         bool      `json:"valid,omitempty"`
-	ScopeKind     string    `json:"scope_kind,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	Slowdown *float64 `json:"slowdown,omitempty"`
+	// RepetitionLimit aborts a chat SSE stream when the same text unit repeats
+	// this many times consecutively. Nil inherits; 0 disables the guard.
+	RepetitionLimit *int `json:"repetition_limit,omitempty"`
+	// RepetitionMaxPattern is the maximum chain length in tokens that the
+	// repetition guard considers as one repeating unit. Nil inherits.
+	RepetitionMaxPattern *int      `json:"repetition_max_pattern,omitempty"`
+	Enabled              bool      `json:"enabled"`
+	Managed              bool      `json:"managed,omitempty"`
+	ResolvedModel        string    `json:"resolved_model,omitempty"`
+	ProviderType         string    `json:"provider_type,omitempty"`
+	Valid                bool      `json:"valid,omitempty"`
+	ScopeKind            string    `json:"scope_kind,omitempty"`
+	CreatedAt            time.Time `json:"created_at"`
+	UpdatedAt            time.Time `json:"updated_at"`
 }
 
 // Resolution captures the requested selector and the concrete selector chosen
