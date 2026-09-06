@@ -13,9 +13,9 @@ import (
 // their decoded delta content. Events are emitted before they are inspected:
 // the guard never rewrites or holds bytes, it can only stop forwarding and
 // append a terminating [DONE] once a run is found.
-func (s *RepetitionGuardStream) observe(data []byte) {
+func (s *RepetitionGuardStream) observe(data []byte) func() {
 	if s.triggered || len(data) == 0 {
-		return
+		return nil
 	}
 	s.pending = append(s.pending, data...)
 
@@ -28,7 +28,7 @@ func (s *RepetitionGuardStream) observe(data []byte) {
 				s.out.AppendBytes(s.pending)
 				s.pending = s.pending[:0]
 			}
-			return
+			return nil
 		}
 
 		event := s.pending[:idx]
@@ -42,33 +42,35 @@ func (s *RepetitionGuardStream) observe(data []byte) {
 		// through byte-identical; we never replace it with the LF constant.
 		s.out.AppendBytes(event)
 		s.out.AppendBytes(sep)
-		s.inspectEvent(event)
+		fired := s.inspectEvent(event)
 		if s.triggered {
 			s.pending = s.pending[:0]
-			return
+			return fired
 		}
 	}
+	return nil
 }
 
 // inspectEvent parses one SSE event's data payload and runs any content
 // deltas through the detector. Non-data, [DONE], non-JSON, and content-free
-// events are ignored.
-func (s *RepetitionGuardStream) inspectEvent(event []byte) {
+// events are ignored. It returns the trigger callback to invoke once the
+// caller has released s.mu, or nil.
+func (s *RepetitionGuardStream) inspectEvent(event []byte) func() {
 	payload := eventPayload(event)
 	if payload == nil || bytes.Equal(payload, donePayload) {
-		return
+		return nil
 	}
 
 	var decoded map[string]any
 	if err := json.Unmarshal(payload, &decoded); err != nil {
 		// Not JSON we can inspect; the bytes were forwarded unchanged.
-		return
+		return nil
 	}
 	s.captureEnvelope(decoded)
 
 	deltas := contentDeltas(decoded)
 	if len(deltas) == 0 {
-		return
+		return nil
 	}
 
 	if !s.counterResolved {
@@ -84,10 +86,10 @@ func (s *RepetitionGuardStream) inspectEvent(event []byte) {
 
 	for _, d := range deltas {
 		if s.inspectDelta(d.choiceIndex, d.content) {
-			s.trigger(d.choiceIndex)
-			return
+			return s.trigger(d.choiceIndex)
 		}
 	}
+	return nil
 }
 
 // eventPayload joins the data lines of an event into one payload, mirroring
@@ -248,9 +250,12 @@ func (s *RepetitionGuardStream) terminalChunk(index int) []byte {
 //     message_stop.
 //   - Responses API: response.completed with status "completed" and the
 //     echoed response envelope. No [DONE] marker.
-func (s *RepetitionGuardStream) trigger(index int) {
+//
+// trigger returns the onTrigger callback for the caller to invoke after
+// releasing s.mu, or nil when none is registered.
+func (s *RepetitionGuardStream) trigger(index int) func() {
 	if s.triggered {
-		return
+		return nil
 	}
 	s.triggered = true
 
@@ -289,9 +294,14 @@ func (s *RepetitionGuardStream) trigger(index int) {
 
 	slog.Warn("stream repetition guard triggered", "choice", index, "model", s.model)
 
-	if s.onTrigger != nil {
-		s.onTrigger()
+	// Return the callback instead of invoking it: Read calls trigger while
+	// holding s.mu, and a callback that calls stream.Close() would deadlock
+	// against that mutex. The caller invokes the returned function after
+	// unlocking.
+	if s.onTrigger == nil {
+		return nil
 	}
+	return s.onTrigger
 }
 
 // responsesCompletedPayload builds the data payload for the synthetic

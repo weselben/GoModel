@@ -112,3 +112,29 @@ func TestSlowdownStream_CloseUnblocksGuardDrain(t *testing.T) {
 		t.Fatal("drain goroutine did not unblock after Close")
 	}
 }
+
+// TestRepetitionGuardStream_TriggerCallbackMayClose — the onTrigger callback
+// must run after Read releases s.mu: a callback that calls stream.Close()
+// would otherwise deadlock (Close waits on the mutex while Read waits in the
+// callback). The read must terminate well before the timeout.
+func TestRepetitionGuardStream_TriggerCallbackMayClose(t *testing.T) {
+	src := newSource(chatEvent("a") + chatEvent("a") + chatEvent("a") + doneEvent())
+	var stream io.ReadCloser
+	stream = NewRepetitionGuardStream(src, 3, 8, "gpt-4o",
+		WithTriggerCallback(func() { _ = stream.Close() }))
+
+	readDone := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(io.Discard, stream)
+		close(readDone)
+	}()
+
+	select {
+	case <-readDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("read deadlocked when the trigger callback called Close")
+	}
+	if src.closeCount == 0 {
+		t.Fatal("expected the source to be closed")
+	}
+}

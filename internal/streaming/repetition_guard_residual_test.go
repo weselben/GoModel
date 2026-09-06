@@ -142,11 +142,15 @@ func TestRepetitionGuardStream_TriggerDoubleCall(t *testing.T) {
 	)
 
 	guard := stream.(*RepetitionGuardStream)
-	guard.trigger(0)
+	if f := guard.trigger(0); f != nil {
+		f()
+	}
 	// second invocation: callback must not run a second time, output must not
 	// append a second [DONE].
 	prevOut := guard.out.Len()
-	guard.trigger(0)
+	if f := guard.trigger(0); f != nil {
+		f()
+	}
 	if guard.out.Len() != prevOut {
 		t.Fatalf("second trigger appended extra bytes: out grew %d -> %d", prevOut, guard.out.Len())
 	}

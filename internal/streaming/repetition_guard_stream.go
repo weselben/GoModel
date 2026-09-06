@@ -195,8 +195,13 @@ func (s *RepetitionGuardStream) Read(p []byte) (int, error) {
 		s.mu.Lock()
 		if n > 0 {
 			s.zeroReads = 0
-			s.observe(scratch[:n])
+			fired := s.observe(scratch[:n])
 			s.mu.Unlock()
+			// The trigger callback runs outside the mutex: it may call
+			// stream.Close(), which needs the mutex itself.
+			if fired != nil {
+				fired()
+			}
 			continue
 		}
 		if err != nil {
