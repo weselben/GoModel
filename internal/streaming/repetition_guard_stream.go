@@ -97,6 +97,10 @@ func WithTriggerCallback(fn func()) GuardOption {
 type choiceState struct {
 	// fenced tracks ``` parity per choice: true while inside a fenced block.
 	fenced bool
+	// backticks is the number of unmatched trailing ` bytes carried from the
+	// previous delta, so a fence marker split across SSE deltas still
+	// completes. Only values 0-2 occur: three backticks close a marker.
+	backticks int
 	// tokenTail is the rolling tail of the last limit*maxPattern token IDs.
 	tokenTail []int
 	// byteTail is the rolling tail of recently observed content bytes.

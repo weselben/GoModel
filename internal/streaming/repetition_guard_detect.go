@@ -106,7 +106,22 @@ func byteRunLength(tail []byte, p int) int {
 	return run
 }
 
-var codeFenceMarker = []byte("```")
+var (
+	codeFenceMarker = []byte("```")
+	backtickByte    = []byte("`")
+)
+
+// trailingBackticks returns how many unmatched trailing backtick bytes text
+// ends with, capped by the marker length: three consecutive backticks close
+// a fence marker (handled by the toggle count), so only an incomplete
+// suffix (0-2) carries into the next delta for split-marker bookkeeping.
+func trailingBackticks(text []byte) int {
+	n := 0
+	for n < len(text) && text[len(text)-1-n] == '`' {
+		n++
+	}
+	return n % len(codeFenceMarker)
+}
 
 // contentDeltas extracts (choiceIndex, text) pairs from a decoded SSE
 // payload across the three supported wire shapes:

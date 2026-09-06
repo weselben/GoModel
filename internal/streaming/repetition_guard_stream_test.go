@@ -247,6 +247,27 @@ func TestRepetitionGuardStream_FencedCodeNoTrigger(t *testing.T) {
 	}
 }
 
+// TestRepetitionGuardStream_FenceMarkerSplitAcrossDeltas — a provider may
+// split one ``` marker across two SSE deltas; neither delta then contains
+// the complete marker, so the guard must carry the unmatched trailing
+// backticks forward or repeated fenced content would trip the detector.
+func TestRepetitionGuardStream_FenceMarkerSplitAcrossDeltas(t *testing.T) {
+	longA := strings.Repeat("a", 120)
+	input := chatEvent("``") + chatEvent("`\n") + chatEvent(longA) + chatEvent("```\n") + doneEvent()
+	src := newSource(input)
+	stream := newGuardWithCounter(src, 3, 8, nil)
+	out, err := io.ReadAll(stream)
+	if err != nil {
+		t.Fatalf("ReadAll error: %v", err)
+	}
+	if string(out) != input {
+		t.Fatalf("split-fence passthrough mismatch\nwant: %q\ngot:  %q", input, string(out))
+	}
+	if src.closeCount != 0 {
+		t.Fatalf("expected no trigger with a split fence marker, got %d close calls", src.closeCount)
+	}
+}
+
 func TestRepetitionGuardStream_MarkdownTableNoTrigger(t *testing.T) {
 	row := "| a | b |\n"
 	input := chatEvent(row) + chatEvent(row) + chatEvent(row) + chatEvent(row) + doneEvent()

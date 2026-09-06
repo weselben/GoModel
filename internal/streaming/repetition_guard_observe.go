@@ -132,7 +132,17 @@ func (s *RepetitionGuardStream) inspectDelta(index int, content []byte) bool {
 
 	// Fenced-code parity: ``` toggles flip the per-choice fence state, and
 	// any delta that touches a fence or lands inside one is never inspected.
-	if toggles := bytes.Count(content, codeFenceMarker); toggles > 0 {
+	// Providers may split one marker across deltas, so prepend the previous
+	// delta's unmatched trailing backticks for the count. The prepended
+	// bytes are bookkeeping only; the detectors always see the real delta.
+	combined := content
+	if st.backticks > 0 {
+		combined = make([]byte, 0, len(content)+st.backticks)
+		combined = append(combined, bytes.Repeat(backtickByte, st.backticks)...)
+		combined = append(combined, content...)
+	}
+	st.backticks = trailingBackticks(combined)
+	if toggles := bytes.Count(combined, codeFenceMarker); toggles > 0 {
 		if toggles%2 == 1 {
 			st.fenced = !st.fenced
 		}
