@@ -2,6 +2,7 @@ package streaming
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"math"
 	"strconv"
@@ -537,6 +538,46 @@ func TestClampGuardParams(t *testing.T) {
 		}
 	}
 }
+
+// TestRepetitionGuardStream_PreservesSourceErrorWithBytes — a source may
+// return final bytes together with a non-EOF error in one Read call. The
+// guard must forward the bytes and surface the error after the buffered
+// output drains, not lose it to another read of the source.
+func TestRepetitionGuardStream_PreservesSourceErrorWithBytes(t *testing.T) {
+	sentinel := errors.New("upstream exploded")
+	src := &bytesThenErrorSource{data: []byte(chatEvent("x") + chatEvent("a") + chatEvent("b") + doneEvent()), err: sentinel}
+	stream := newGuardWithCounter(src, 3, 8, newTestCounter{"x": {1}, "a": {2}, "b": {3}})
+
+	out, err := io.ReadAll(stream)
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("ReadAll error = %v, want sentinel %v", err, sentinel)
+	}
+	input := chatEvent("x") + chatEvent("a") + chatEvent("b") + doneEvent()
+	if !bytes.Equal(out, []byte(input)) {
+		t.Fatalf("passthrough mismatch before the error\nwant: %q\ngot:  %q", input, string(out))
+	}
+}
+
+// bytesThenErrorSource returns its payload together with err from a single
+// Read call, modeling a provider that ends a stream with both data and a
+// transport error (legal per io.Reader). A later Read reports io.EOF, the
+// way an HTTP body does, so a guard that re-reads after the error would
+// mask the sentinel as a clean EOF.
+type bytesThenErrorSource struct {
+	data   []byte
+	err    error
+	served bool
+}
+
+func (s *bytesThenErrorSource) Read(p []byte) (int, error) {
+	if s.served {
+		return 0, io.EOF
+	}
+	s.served = true
+	return copy(p, s.data), s.err
+}
+
+func (s *bytesThenErrorSource) Close() error { return nil }
 
 // TestRepetitionGuardStream_ForwardsUnterminatedFinalEvent verifies that a
 // source ending without the blank-line separator after its last data payload

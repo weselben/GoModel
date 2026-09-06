@@ -183,7 +183,12 @@ func (s *RepetitionGuardStream) Read(p []byte) (int, error) {
 			return n, nil
 		}
 		if s.triggered || s.sourceDone || s.closed {
+			readErr := s.readErr
+			sourceDone := s.sourceDone
 			s.mu.Unlock()
+			if sourceDone && readErr != nil {
+				return 0, readErr
+			}
 			return 0, io.EOF
 		}
 		if s.scratch == nil {
@@ -200,6 +205,18 @@ func (s *RepetitionGuardStream) Read(p []byte) (int, error) {
 		if n > 0 {
 			s.zeroReads = 0
 			fired := s.observe(scratch[:n])
+			if err != nil {
+				// The source delivered final bytes together with an error,
+				// which io.Reader permits: forward any buffered tail, mark
+				// the source done, and surface the error once the output
+				// drains instead of reading again.
+				if len(s.pending) > 0 {
+					s.out.AppendBytes(s.pending)
+					s.pending = s.pending[:0]
+				}
+				s.readErr = err
+				s.sourceDone = true
+			}
 			s.mu.Unlock()
 			// The trigger callback runs outside the mutex: it may call
 			// stream.Close(), which needs the mutex itself.
