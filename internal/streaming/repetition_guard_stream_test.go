@@ -756,8 +756,9 @@ func TestRepetitionGuardStream_Read_SourceAlreadyDone(t *testing.T) {
 func TestRepetitionGuardStream_Observe_RunawayEvent(t *testing.T) {
 	// Build a single event whose data payload exceeds maxPendingEventBytes (16 KB).
 	large := strings.Repeat("a", maxPendingEventBytes+1024)
-	// Wrap in an SSE event (data: ...\n\n).
-	event := "data: \"" + escapeJSONString(large) + "\"\n\n"
+	// No trailing blank-line separator: observe must hit the oversized
+	// pending-event branch, which forwards the runaway bytes unobserved.
+	event := "data: " + escapeJSONString(large)
 	src := newSource(event)
 	stream := newGuardWithCounter(src, 3, 8, nil)
 	out, err := io.ReadAll(stream)
