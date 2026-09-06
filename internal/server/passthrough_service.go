@@ -18,6 +18,8 @@ type passthroughService struct {
 	pricingResolver              usage.PricingResolver
 	normalizePassthroughV1Prefix bool
 	enabledPassthroughProviders  map[string]struct{}
+	streamRepetitionLimit        int
+	streamRepetitionMaxPattern   int
 }
 
 func (s *passthroughService) ProviderPassthrough(c *echo.Context) error {

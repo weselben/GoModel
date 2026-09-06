@@ -152,6 +152,8 @@ func (b *bootstrap) initServerConfig() error {
 		SessionDetector:                 session.NewDetectorFromConfig(appCfg.Session),
 		MCPEnabled:                      appCfg.MCP.Enabled,
 		VersionChecker:                  app.versionCheck,
+		StreamRepetitionLimit:           appCfg.Resilience.StreamRepetitionLimit,
+		StreamRepetitionMaxPattern:      appCfg.Resilience.StreamRepetitionMaxPattern,
 	}
 	if app.mcpGateway != nil {
 		serverCfg.MCPGateway = app.mcpGateway.Service

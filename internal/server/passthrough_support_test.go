@@ -63,7 +63,7 @@ func TestProxyPassthroughNonStreamingLogsUsage(t *testing.T) {
 	c := e.NewContext(req, rec)
 
 	info := &core.PassthroughRouteInfo{Provider: "anthropic", RawEndpoint: "messages", Model: "claude-fable-5"}
-	if err := proxyPassthroughResponse(c, nil, usageLogger, nil, "anthropic", "anthropic", "messages", info, resp); err != nil {
+	if err := proxyPassthroughResponse(c, nil, usageLogger, nil, "anthropic", "anthropic", "messages", info, resp, 0, 0); err != nil {
 		t.Fatalf("proxyPassthroughResponse: %v", err)
 	}
 	if rec.Body.String() != body {
@@ -99,7 +99,7 @@ func TestProxyPassthroughNonStreamingLogsUsageForNon200Success(t *testing.T) {
 		c := e.NewContext(req, rec)
 
 		info := &core.PassthroughRouteInfo{Provider: "anthropic", RawEndpoint: "messages"}
-		if err := proxyPassthroughResponse(c, nil, usageLogger, nil, "anthropic", "anthropic", "messages", info, resp); err != nil {
+		if err := proxyPassthroughResponse(c, nil, usageLogger, nil, "anthropic", "anthropic", "messages", info, resp, 0, 0); err != nil {
 			t.Fatalf("status %d: proxyPassthroughResponse: %v", status, err)
 		}
 		if len(usageLogger.entries) != 1 {
@@ -141,7 +141,7 @@ func TestProxyPassthroughNonStreamingSkipsNonAccountableResponses(t *testing.T) 
 			c := e.NewContext(req, rec)
 
 			info := &core.PassthroughRouteInfo{Provider: "anthropic", RawEndpoint: "messages"}
-			if err := proxyPassthroughResponse(c, nil, usageLogger, nil, "anthropic", "anthropic", "messages", info, resp); err != nil {
+			if err := proxyPassthroughResponse(c, nil, usageLogger, nil, "anthropic", "anthropic", "messages", info, resp, 0, 0); err != nil {
 				t.Fatalf("proxyPassthroughResponse: %v", err)
 			}
 			if rec.Body.String() != body {
