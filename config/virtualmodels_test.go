@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestApplyVirtualModelsEnv_ParsesAndMerges(t *testing.T) {
@@ -115,5 +117,61 @@ func TestApplyVirtualModelsEnv_Unset(t *testing.T) {
 	}
 	if len(cfg.VirtualModels) != 1 {
 		t.Fatalf("unset env mutated config: %#v", cfg.VirtualModels)
+	}
+}
+
+// Declarative repetition fields round-trip through YAML: repetition_limit: 0 and
+// repetition_max_pattern: 12 decode to non-nil pointers, so operator
+// infrastructure-as-code can pin the per-model guard.
+func TestVirtualModelConfigYAML_RoundTripsRepetition(t *testing.T) {
+	const src = `
+source: smart
+target: openai/gpt-4o
+repetition_limit: 0
+repetition_max_pattern: 12
+`
+	var cfg VirtualModelConfig
+	if err := yaml.Unmarshal([]byte(src), &cfg); err != nil {
+		t.Fatalf("yaml.Unmarshal() error = %v", err)
+	}
+	if cfg.Source != "smart" || cfg.Target != "openai/gpt-4o" {
+		t.Fatalf("scalar fields not decoded: %#v", cfg)
+	}
+	if cfg.RepetitionLimit == nil {
+		t.Fatal("RepetitionLimit = nil, want non-nil pointer (explicit zero)")
+	}
+	if *cfg.RepetitionLimit != 0 {
+		t.Fatalf("RepetitionLimit = %d, want 0", *cfg.RepetitionLimit)
+	}
+	if cfg.RepetitionMaxPattern == nil {
+		t.Fatal("RepetitionMaxPattern = nil, want non-nil pointer")
+	}
+	if *cfg.RepetitionMaxPattern != 12 {
+		t.Fatalf("RepetitionMaxPattern = %d, want 12", *cfg.RepetitionMaxPattern)
+	}
+}
+
+// The docs/features/stream-repetition-guard.mdx per-model override snippet
+// must decode cleanly with CONFIG_STRICT=true, otherwise the documented
+// example fails the user's first strict-mode load.
+func TestVirtualModelConfigYAML_DocSnippetLoads(t *testing.T) {
+	const src = `
+source: chat
+target: openai/gpt-4o
+repetition_limit: 4
+repetition_max_pattern: 8
+`
+	var cfg VirtualModelConfig
+	if err := yaml.Unmarshal([]byte(src), &cfg); err != nil {
+		t.Fatalf("doc snippet failed to decode: %v", err)
+	}
+	if cfg.Source != "chat" || cfg.Target != "openai/gpt-4o" {
+		t.Fatalf("scalar fields not decoded: %#v", cfg)
+	}
+	if cfg.RepetitionLimit == nil || *cfg.RepetitionLimit != 4 {
+		t.Fatalf("RepetitionLimit = %v, want pointer to 4", cfg.RepetitionLimit)
+	}
+	if cfg.RepetitionMaxPattern == nil || *cfg.RepetitionMaxPattern != 8 {
+		t.Fatalf("RepetitionMaxPattern = %v, want pointer to 8", cfg.RepetitionMaxPattern)
 	}
 }

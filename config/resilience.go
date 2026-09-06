@@ -1,6 +1,9 @@
 package config
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // RetryConfig holds resolved retry settings for an LLM client.
 // This is the canonical type shared between config and llmclient.
@@ -49,6 +52,29 @@ func DefaultCircuitBreakerConfig() CircuitBreakerConfig {
 type ResilienceConfig struct {
 	Retry          RetryConfig          `yaml:"retry"`
 	CircuitBreaker CircuitBreakerConfig `yaml:"circuit_breaker"`
+	// StreamRepetitionLimit aborts a chat SSE stream when the same text unit
+	// repeats this many times consecutively. 0 (default) disables the guard.
+	StreamRepetitionLimit int `yaml:"stream_repetition_limit" env:"STREAM_REPETITION_LIMIT"`
+	// StreamRepetitionMaxPattern is the maximum chain length in tokens that
+	// the repetition guard considers as one repeating unit. 0 selects the
+	// built-in default (8).
+	StreamRepetitionMaxPattern int `yaml:"stream_repetition_max_pattern" env:"STREAM_REPETITION_MAX_PATTERN"`
+}
+
+// validateStreamRepetitionConfig rejects global repetition-guard settings that
+// would silently clamp later. A negative or singular limit is meaningless —
+// the guard clamps it to the minimum of 2 — so it is a config error here,
+// matching the per-virtual-model rule in internal/virtualmodels/validation.go.
+// StreamRepetitionMaxPattern must be 0 (built-in default of 8) or in 1..64;
+// values outside that range would also be silently clamped.
+func validateStreamRepetitionConfig(cfg *ResilienceConfig) error {
+	if cfg.StreamRepetitionLimit < 0 || cfg.StreamRepetitionLimit == 1 {
+		return fmt.Errorf("resilience.stream_repetition_limit must be 0 (disabled) or at least 2, got %d", cfg.StreamRepetitionLimit)
+	}
+	if cfg.StreamRepetitionMaxPattern < 0 || cfg.StreamRepetitionMaxPattern > 64 {
+		return fmt.Errorf("resilience.stream_repetition_max_pattern must be 0 (default) or between 1 and 64, got %d", cfg.StreamRepetitionMaxPattern)
+	}
+	return nil
 }
 
 // RawResilienceConfig holds optional per-provider resilience overrides from YAML.
