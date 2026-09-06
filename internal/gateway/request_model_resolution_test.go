@@ -112,6 +112,22 @@ func (r *requestSlowdownResolver) ResolveSlowdown(_ context.Context, requested c
 	return r.factor
 }
 
+// requestRepetitionResolver returns fixed per-request overrides from its
+// pointer fields. nil values mean "inherit" for that field.
+type requestRepetitionResolver struct {
+	requestAliasResolver
+	limit      *int
+	maxPattern *int
+	requested  string
+	resolved   string
+}
+
+func (r *requestRepetitionResolver) ResolveRepetitionLimit(_ context.Context, requested core.RequestedModelSelector, resolved core.ModelSelector) (*int, *int) {
+	r.requested = requested.RequestedQualifiedModel()
+	r.resolved = resolved.QualifiedModel()
+	return r.limit, r.maxPattern
+}
+
 func TestResolveRequestModelCarriesResolvedSlowdownFactor(t *testing.T) {
 	aliasResolver := &requestSlowdownResolver{
 		requestAliasResolver: requestAliasResolver{
@@ -330,5 +346,96 @@ func TestResolveRequestModelReturnsRefreshError(t *testing.T) {
 	}
 	if gatewayErr.Type != core.ErrorTypeProvider {
 		t.Fatalf("error type = %q, want %q", gatewayErr.Type, core.ErrorTypeProvider)
+	}
+}
+
+func TestResolveRequestModelCarriesRepetitionOverrides(t *testing.T) {
+	zero, three, twelve, eight := 0, 3, 12, 8
+	tests := []struct {
+		name            string
+		resolver        ModelResolver
+		wantLimit       *int
+		wantMaxPattern  *int
+		wantCapture     bool
+		wantRequested   string
+		wantResolvedSel string
+	}{
+		{
+			name: "override limit and max pattern",
+			resolver: &requestRepetitionResolver{
+				requestAliasResolver: requestAliasResolver{
+					"smart": {Provider: "openai", Model: "gpt-4o"},
+				},
+				limit:      &three,
+				maxPattern: &twelve,
+			},
+			wantLimit:       &three,
+			wantMaxPattern:  &twelve,
+			wantCapture:     true,
+			wantRequested:   "smart",
+			wantResolvedSel: "openai/gpt-4o",
+		},
+		{
+			name: "explicit zero limit lands as pointer (guard off)",
+			resolver: &requestRepetitionResolver{
+				requestAliasResolver: requestAliasResolver{
+					"smart": {Provider: "openai", Model: "gpt-4o"},
+				},
+				limit: &zero,
+			},
+			wantLimit:       &zero,
+			wantMaxPattern:  nil,
+			wantCapture:     true,
+			wantRequested:   "smart",
+			wantResolvedSel: "openai/gpt-4o",
+		},
+		{
+			name: "nil fields stay nil",
+			resolver: &requestRepetitionResolver{
+				requestAliasResolver: requestAliasResolver{
+					"smart": {Provider: "openai", Model: "gpt-4o"},
+				},
+				maxPattern: &eight,
+			},
+			wantLimit:       nil,
+			wantMaxPattern:  &eight,
+			wantCapture:     true,
+			wantRequested:   "smart",
+			wantResolvedSel: "openai/gpt-4o",
+		},
+		{
+			name: "resolver without repetition contract",
+			resolver: requestAliasResolver{
+				"smart": {Provider: "openai", Model: "gpt-4o"},
+			},
+			wantLimit:       nil,
+			wantMaxPattern:  nil,
+			wantResolvedSel: "openai/gpt-4o",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolution, err := ResolveRequestModelWithAuthorizer(
+				context.Background(), newRequestRefreshProvider(1), tt.resolver, nil,
+				core.NewRequestedModelSelector("smart", ""),
+			)
+			if err != nil {
+				t.Fatalf("ResolveRequestModelWithAuthorizer() error = %v", err)
+			}
+			if (resolution.RepetitionLimit == nil) != (tt.wantLimit == nil) ||
+				(resolution.RepetitionLimit != nil && *resolution.RepetitionLimit != *tt.wantLimit) {
+				t.Fatalf("resolution.RepetitionLimit = %v, want %v", resolution.RepetitionLimit, tt.wantLimit)
+			}
+			if (resolution.RepetitionMaxPattern == nil) != (tt.wantMaxPattern == nil) ||
+				(resolution.RepetitionMaxPattern != nil && *resolution.RepetitionMaxPattern != *tt.wantMaxPattern) {
+				t.Fatalf("resolution.RepetitionMaxPattern = %v, want %v", resolution.RepetitionMaxPattern, tt.wantMaxPattern)
+			}
+			capture, _ := tt.resolver.(*requestRepetitionResolver)
+			if tt.wantCapture && capture != nil &&
+				(capture.requested != tt.wantRequested || capture.resolved != tt.wantResolvedSel) {
+				t.Fatalf("repetition resolver inputs = (%q, %q), want (%q, %q)", capture.requested, capture.resolved, tt.wantRequested, tt.wantResolvedSel)
+			}
+		})
 	}
 }

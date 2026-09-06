@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/enterpilot/gomodel/internal/core"
+	"github.com/enterpilot/gomodel/internal/observability"
 	"github.com/enterpilot/gomodel/internal/streaming"
 	"github.com/enterpilot/gomodel/internal/usage"
 )
@@ -19,49 +20,55 @@ type RouteGate interface {
 
 // InferenceConfig configures translated inference orchestration.
 type InferenceConfig struct {
-	Provider                 core.RoutableProvider
-	ModelResolver            ModelResolver
-	ModelAuthorizer          ModelAuthorizer
-	WorkflowPolicyResolver   WorkflowPolicyResolver
-	FailoverResolver         FailoverResolver
-	FailoverPolicy           *FailoverPolicy // Optional: nil applies the default failover policy
-	TranslatedRequestPatcher TranslatedRequestPatcher
-	UsageLogger              usage.LoggerInterface
-	PricingResolver          usage.PricingResolver
-	RouteGate                RouteGate
-	GuardrailsHash           string
+	Provider                   core.RoutableProvider
+	ModelResolver              ModelResolver
+	ModelAuthorizer            ModelAuthorizer
+	WorkflowPolicyResolver     WorkflowPolicyResolver
+	FailoverResolver           FailoverResolver
+	FailoverPolicy             *FailoverPolicy // Optional: nil applies the default failover policy
+	TranslatedRequestPatcher   TranslatedRequestPatcher
+	UsageLogger                usage.LoggerInterface
+	PricingResolver            usage.PricingResolver
+	RouteGate                  RouteGate
+	GuardrailsHash             string
+	StreamRepetitionLimit      int
+	StreamRepetitionMaxPattern int
 }
 
 // InferenceOrchestrator owns translated inference workflow resolution, request
 // patching, provider dispatch, failover, usage logging, and cache metadata.
 type InferenceOrchestrator struct {
-	provider                 core.RoutableProvider
-	modelResolver            ModelResolver
-	modelAuthorizer          ModelAuthorizer
-	workflowPolicyResolver   WorkflowPolicyResolver
-	failoverResolver         FailoverResolver
-	failoverPolicy           *FailoverPolicy
-	translatedRequestPatcher TranslatedRequestPatcher
-	usageLogger              usage.LoggerInterface
-	pricingResolver          usage.PricingResolver
-	routeGate                RouteGate
-	guardrailsHash           string
+	provider                   core.RoutableProvider
+	modelResolver              ModelResolver
+	modelAuthorizer            ModelAuthorizer
+	workflowPolicyResolver     WorkflowPolicyResolver
+	failoverResolver           FailoverResolver
+	failoverPolicy             *FailoverPolicy
+	translatedRequestPatcher   TranslatedRequestPatcher
+	usageLogger                usage.LoggerInterface
+	pricingResolver            usage.PricingResolver
+	routeGate                  RouteGate
+	guardrailsHash             string
+	streamRepetitionLimit      int
+	streamRepetitionMaxPattern int
 }
 
 // NewInferenceOrchestrator creates a translated inference orchestrator.
 func NewInferenceOrchestrator(cfg InferenceConfig) *InferenceOrchestrator {
 	return &InferenceOrchestrator{
-		provider:                 cfg.Provider,
-		modelResolver:            cfg.ModelResolver,
-		modelAuthorizer:          cfg.ModelAuthorizer,
-		workflowPolicyResolver:   cfg.WorkflowPolicyResolver,
-		failoverResolver:         cfg.FailoverResolver,
-		failoverPolicy:           cfg.FailoverPolicy,
-		translatedRequestPatcher: cfg.TranslatedRequestPatcher,
-		usageLogger:              cfg.UsageLogger,
-		pricingResolver:          cfg.PricingResolver,
-		routeGate:                cfg.RouteGate,
-		guardrailsHash:           cfg.GuardrailsHash,
+		provider:                   cfg.Provider,
+		modelResolver:              cfg.ModelResolver,
+		modelAuthorizer:            cfg.ModelAuthorizer,
+		workflowPolicyResolver:     cfg.WorkflowPolicyResolver,
+		failoverResolver:           cfg.FailoverResolver,
+		failoverPolicy:             cfg.FailoverPolicy,
+		translatedRequestPatcher:   cfg.TranslatedRequestPatcher,
+		usageLogger:                cfg.UsageLogger,
+		pricingResolver:            cfg.PricingResolver,
+		routeGate:                  cfg.RouteGate,
+		guardrailsHash:             cfg.GuardrailsHash,
+		streamRepetitionLimit:      cfg.StreamRepetitionLimit,
+		streamRepetitionMaxPattern: cfg.StreamRepetitionMaxPattern,
 	}
 }
 
@@ -127,15 +134,23 @@ type StreamResult struct {
 	Stream io.ReadCloser
 	Meta   ExecutionMeta
 
-	slowdownFactor   float64
-	inferenceStarted time.Time
+	slowdownFactor       float64
+	inferenceStarted     time.Time
+	repetitionLimit      int
+	repetitionMaxPattern int
 }
 
-// WrapDeliveryStream applies this result's client-facing slowdown after any
-// accounting or persistence wrappers have been attached to stream.
+// WrapDeliveryStream applies the repetition guard and this result's
+// client-facing slowdown after any accounting or persistence wrappers have
+// been attached to stream. The guard sits inside the slowdown so a detected
+// loop still drains cleanly through the delay queue before EOF.
 func (r *StreamResult) WrapDeliveryStream(ctx context.Context, stream io.ReadCloser) io.ReadCloser {
 	if r == nil {
 		return stream
 	}
+	stream = streaming.NewRepetitionGuardStream(stream, r.repetitionLimit, r.repetitionMaxPattern, r.Meta.Model,
+		streaming.WithTriggerCallback(func() {
+			observability.StreamRepetitionTriggers.WithLabelValues(r.Meta.ProviderName, r.Meta.Model).Inc()
+		}))
 	return streaming.NewSlowdownStream(ctx, stream, r.slowdownFactor, r.inferenceStarted)
 }
