@@ -10,6 +10,7 @@ import {
   buildCreateAuthKeyPayload,
   countInactiveAuthKeys,
   defaultAuthKeyForm,
+  distinctAuthKeyLabels,
   filterAuthKeys,
   labelChipStyle,
   labelColor,
@@ -299,4 +300,24 @@ test("filterAuthKeys userPath keeps the path and its subtree on segment boundari
   assert.equal(filterAuthKeys(keys, { userPath: "" }).length, 5);
   assert.equal(authKeyUnderPath(authKey({ user_path: "/x" }), "/"), true);
   assert.equal(authKeyUnderPath(authKey({ user_path: "" }), "/acme"), false);
+});
+
+test("distinctAuthKeyLabels counts keys per label and sorts alphabetically", () => {
+  const keys = [
+    authKey({ id: "k1", labels: ["team-b", "batch"] }),
+    authKey({ id: "k2", labels: ["team-a"] }),
+    authKey({ id: "k3", labels: ["team-a", "batch"] }),
+    authKey({ id: "k4", labels: [] }),
+  ];
+  assert.deepEqual(distinctAuthKeyLabels(keys), [
+    { label: "batch", count: 2 },
+    { label: "team-a", count: 2 },
+    { label: "team-b", count: 1 },
+  ]);
+});
+
+test("distinctAuthKeyLabels tolerates missing lists and keys without labels", () => {
+  assert.deepEqual(distinctAuthKeyLabels(undefined), []);
+  assert.deepEqual(distinctAuthKeyLabels(null), []);
+  assert.deepEqual(distinctAuthKeyLabels([authKey({ labels: undefined })]), []);
 });

@@ -255,5 +255,20 @@ export function countInactiveAuthKeys(keys, now = Date.now()) {
   return list.reduce((total, key) => total + (authKeyActive(key, now) ? 0 : 1), 0);
 }
 
+// distinctAuthKeyLabels lists every label in use with the number of keys
+// carrying it, sorted alphabetically. Rename-one-label-everywhere builds its
+// picker from this.
+export function distinctAuthKeyLabels(keys) {
+  const counts = new Map();
+  for (const key of Array.isArray(keys) ? keys : []) {
+    for (const label of key.labels || []) {
+      counts.set(label, (counts.get(label) || 0) + 1);
+    }
+  }
+  return [...counts.entries()]
+    .map(([label, count]) => ({ label, count }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+}
+
 // Label chips share the dashboard-wide palette and chip styling.
 export { labelChipStyle, labelColor } from "../../lib/utils/chartTheme.js";

@@ -366,3 +366,165 @@ func TestCreateAuthKeyRejectsInvalidUserPath(t *testing.T) {
 		t.Fatalf("CreateAuthKey() status = %d, want 400", createRec.Code)
 	}
 }
+
+func TestRenameAuthKeyLabel(t *testing.T) {
+	now := time.Now().UTC()
+	key := func(id, userPath string, labels ...string) authkeys.AuthKey {
+		return authkeys.AuthKey{
+			ID: id, Name: id, UserPath: userPath, Labels: labels, Enabled: true,
+			RedactedValue: "sk_gom_***", SecretHash: "hash-" + id,
+			CreatedAt: now, UpdatedAt: now,
+		}
+	}
+	newHandler := func(t *testing.T) *Handler {
+		t.Helper()
+		return newAuthKeyHandler(t, newAuthKeyTestStore(
+			key("k1", "/team/alpha", "team-a", "batch"),
+			key("k2", "/team/alpha/svc", "team-a"),
+			key("k3", "/team/beta", "team-a"),
+			key("k4", "", "team-a", "team-b"),
+			key("k5", "/team/alpha", "unrelated"),
+		))
+	}
+
+	rename := func(h *Handler, body, scope string) (*httptest.ResponseRecorder, error) {
+		c, rec := scopedRequest(http.MethodPut, "/admin/auth-keys/labels/rename", body, scope)
+		return rec, h.RenameAuthKeyLabel(c)
+	}
+
+	listLabels := func(t *testing.T, h *Handler) map[string][]string {
+		t.Helper()
+		c, rec := scopedRequest(http.MethodGet, "/admin/auth-keys", "", "")
+		if err := h.ListAuthKeys(c); err != nil {
+			t.Fatalf("ListAuthKeys() error = %v", err)
+		}
+		var rows []authkeys.View
+		if err := json.Unmarshal(rec.Body.Bytes(), &rows); err != nil {
+			t.Fatalf("unmarshal list response: %v", err)
+		}
+		labels := make(map[string][]string, len(rows))
+		for _, row := range rows {
+			labels[row.ID] = row.Labels
+		}
+		return labels
+	}
+
+	t.Run("global rename updates every matching key", func(t *testing.T) {
+		h := newHandler(t)
+		rec, err := rename(h, `{"from":"team-a","to":"team-b"}`, "")
+		if err != nil {
+			t.Fatalf("RenameAuthKeyLabel() error = %v", err)
+		}
+		if rec.Code != http.StatusOK {
+			t.Fatalf("RenameAuthKeyLabel() status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+		}
+		var resp renameAuthKeyLabelResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("unmarshal rename response: %v", err)
+		}
+		if resp.Renamed != 4 {
+			t.Fatalf("renamed = %d, want 4", resp.Renamed)
+		}
+		labels := listLabels(t, h)
+		if !reflect.DeepEqual(labels["k1"], []string{"team-b", "batch"}) {
+			t.Fatalf("k1 labels = %v, want [team-b batch]", labels["k1"])
+		}
+		if !reflect.DeepEqual(labels["k2"], []string{"team-b"}) {
+			t.Fatalf("k2 labels = %v, want [team-b]", labels["k2"])
+		}
+		// k4 already carried team-b: the rename merges instead of duplicating.
+		if !reflect.DeepEqual(labels["k4"], []string{"team-b"}) {
+			t.Fatalf("k4 labels = %v, want [team-b]", labels["k4"])
+		}
+		if !reflect.DeepEqual(labels["k5"], []string{"unrelated"}) {
+			t.Fatalf("k5 labels = %v, want [unrelated]", labels["k5"])
+		}
+	})
+
+	t.Run("scoped rename only touches keys inside the scope", func(t *testing.T) {
+		h := newHandler(t)
+		rec, err := rename(h, `{"from":"team-a","to":"team-c"}`, scopeAlpha)
+		if err != nil {
+			t.Fatalf("RenameAuthKeyLabel() error = %v", err)
+		}
+		if rec.Code != http.StatusOK {
+			t.Fatalf("RenameAuthKeyLabel() status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+		}
+		var resp renameAuthKeyLabelResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("unmarshal rename response: %v", err)
+		}
+		if resp.Renamed != 2 {
+			t.Fatalf("renamed = %d, want 2 (k1, k2)", resp.Renamed)
+		}
+		labels := listLabels(t, h)
+		if !reflect.DeepEqual(labels["k3"], []string{"team-a"}) {
+			t.Fatalf("k3 labels = %v, want untouched [team-a]", labels["k3"])
+		}
+		if !reflect.DeepEqual(labels["k4"], []string{"team-a", "team-b"}) {
+			t.Fatalf("k4 labels = %v, want untouched [team-a team-b]", labels["k4"])
+		}
+	})
+
+	t.Run("no match renames nothing", func(t *testing.T) {
+		h := newHandler(t)
+		rec, err := rename(h, `{"from":"missing","to":"team-b"}`, "")
+		if err != nil {
+			t.Fatalf("RenameAuthKeyLabel() error = %v", err)
+		}
+		if rec.Code != http.StatusOK {
+			t.Fatalf("RenameAuthKeyLabel() status = %d, want 200", rec.Code)
+		}
+		var resp renameAuthKeyLabelResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("unmarshal rename response: %v", err)
+		}
+		if resp.Renamed != 0 {
+			t.Fatalf("renamed = %d, want 0", resp.Renamed)
+		}
+	})
+
+	t.Run("invalid input is rejected", func(t *testing.T) {
+		h := newHandler(t)
+		for _, body := range []string{
+			`{"from":"","to":"team-b"}`,
+			`{"from":"team-a"}`,
+			`{"from":"  ","to":"team-b"}`,
+			`{"from":"team-a","to":" team-a "}`,
+		} {
+			rec, err := rename(h, body, "")
+			if err != nil {
+				t.Fatalf("RenameAuthKeyLabel(%s) error = %v", body, err)
+			}
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("RenameAuthKeyLabel(%s) status = %d, want 400", body, rec.Code)
+			}
+		}
+	})
+
+	t.Run("label whitespace is normalized before matching", func(t *testing.T) {
+		h := newHandler(t)
+		rec, err := rename(h, `{"from":" team-a ","to":" team-d "}`, "")
+		if err != nil {
+			t.Fatalf("RenameAuthKeyLabel() error = %v", err)
+		}
+		if rec.Code != http.StatusOK {
+			t.Fatalf("RenameAuthKeyLabel() status = %d, want 200", rec.Code)
+		}
+		labels := listLabels(t, h)
+		if !reflect.DeepEqual(labels["k2"], []string{"team-d"}) {
+			t.Fatalf("k2 labels = %v, want [team-d]", labels["k2"])
+		}
+	})
+}
+
+func TestRenameAuthKeyLabelReturns503WhenServiceUnavailable(t *testing.T) {
+	h := NewHandler(nil, nil)
+	c, rec := scopedRequest(http.MethodPut, "/admin/auth-keys/labels/rename", `{"from":"a","to":"b"}`, "")
+	if err := h.RenameAuthKeyLabel(c); err != nil {
+		t.Fatalf("RenameAuthKeyLabel() error = %v", err)
+	}
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("RenameAuthKeyLabel() status = %d, want 503", rec.Code)
+	}
+}
