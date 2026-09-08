@@ -10,6 +10,8 @@
   import AuthKeyEditor from "./AuthKeyEditor.svelte";
   import AuthKeyLabelsEditor from "./AuthKeyLabelsEditor.svelte";
   import AuthKeyAllowedModelsEditor from "./AuthKeyAllowedModelsEditor.svelte";
+  import AuthKeyLabelManager from "./AuthKeyLabelManager.svelte";
+  import AuthKeyLabelRenameDialog from "./AuthKeyLabelRenameDialog.svelte";
   import AuthKeyList from "./AuthKeyList.svelte";
   import { Plus, X } from "lucide";
   import * as m from "$lib/paraglide/messages.js";
@@ -59,6 +61,7 @@
   <AuthKeyEditor />
   <AuthKeyLabelsEditor />
   <AuthKeyAllowedModelsEditor />
+  <AuthKeyLabelRenameDialog />
 
   {#if store.loading && store.keys.length === 0}
     <LoadingState label={m.api_keys_loading()} />
@@ -114,6 +117,8 @@
   {#if store.keys.length === 0 && !store.loading && !auth.authError && !store.error && store.available}
     <p class="empty-state">{m.api_keys_empty()}</p>
   {/if}
+
+  <AuthKeyLabelManager />
 </div>
 
 <style>

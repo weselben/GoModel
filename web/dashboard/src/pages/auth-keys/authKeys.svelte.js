@@ -14,6 +14,7 @@ import {
   buildCreateAuthKeyPayload,
   countInactiveAuthKeys,
   defaultAuthKeyForm,
+  distinctAuthKeyLabels,
   filterAuthKeys,
   parseAuthKeyAllowedModels,
   parseAuthKeyLabels,
@@ -22,6 +23,10 @@ import {
 
 function emptyLabelsEditor() {
   return { open: false, id: "", name: "", value: "", submitting: false, error: "" };
+}
+
+function emptyLabelRename() {
+  return { open: false, from: "", to: "", submitting: false, error: "" };
 }
 
 function emptyAllowedModelsEditor() {
@@ -62,6 +67,11 @@ class AuthKeysStore {
   form = $state(defaultAuthKeyForm());
   labelsEditor = $state(emptyLabelsEditor());
   allowedModelsEditor = $state(emptyAllowedModelsEditor());
+  labelRename = $state(emptyLabelRename());
+
+  // Labels currently in use across the fetched keys, with per-label key
+  // counts — the mass-rename section's data source.
+  distinctLabels = $derived(distinctAuthKeyLabels(this.keys));
 
   copyState = createCopyState({ logPrefix: "Failed to copy auth key:" });
 
@@ -267,6 +277,67 @@ class AuthKeysStore {
       void this.fetchKeys();
     } finally {
       editor.submitting = false;
+    }
+  }
+
+  openLabelRename(label) {
+    if (!label || this.labelRename.submitting) {
+      return;
+    }
+    this.labelRename = { open: true, from: label, to: "", submitting: false, error: "" };
+  }
+
+  closeLabelRename() {
+    if (!this.labelRename.open || this.labelRename.submitting) {
+      return;
+    }
+    this.labelRename = emptyLabelRename();
+  }
+
+  // submitLabelRename renames one label across every key that carries it.
+  // Labels are metadata only — key values and access never change.
+  async submitLabelRename() {
+    const dialog = this.labelRename;
+    if (!dialog.open || dialog.submitting || !dialog.from) {
+      return;
+    }
+    dialog.submitting = true;
+    dialog.error = "";
+    const payload = { from: dialog.from, to: dialog.to.trim() };
+
+    try {
+      const outcome = await sendAdminMutation(
+        "/admin/auth-keys/labels/rename",
+        "PUT",
+        payload,
+        {
+          label: "rename API key label",
+          errorFallback: m.api_keys_label_rename_failed(),
+          unavailableMessage: m.api_keys_feature_unavailable(),
+        },
+      );
+      if (outcome.status === "stale") {
+        return;
+      }
+      if (outcome.status === "unavailable") {
+        this.available = false;
+        dialog.error = outcome.error;
+        return;
+      }
+      if (outcome.status === "error") {
+        dialog.error = outcome.error;
+        if (outcome.result && outcome.result.status !== 401) {
+          console.error("Failed to rename auth key label:", outcome.result.status, dialog.error);
+        }
+        return;
+      }
+      const renamed = (outcome.result.data && outcome.result.data.renamed) || 0;
+      flash.success(m.api_keys_label_renamed({ from: dialog.from, to: payload.to, count: renamed }));
+      dialog.submitting = false;
+      this.closeLabelRename();
+      void this.fetchKeys();
+    } finally {
+      dialog.submitting = false;
     }
   }
 

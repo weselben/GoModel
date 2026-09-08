@@ -123,6 +123,82 @@ func (h *Handler) UpdateAuthKeyLabels(c *echo.Context) error {
 	})
 }
 
+type renameAuthKeyLabelRequest struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+// renameAuthKeyLabelResponse reports how many keys had the label replaced.
+type renameAuthKeyLabelResponse struct {
+	From    string `json:"from"`
+	To      string `json:"to"`
+	Renamed int    `json:"renamed"`
+}
+
+// RenameAuthKeyLabel handles PUT /admin/auth-keys/labels/rename. It renames
+// one label across every key in the caller's scope that carries it. Labels
+// are metadata only — key material, authentication, and validity never
+// change. Renaming onto a label a key already has merges the two.
+func (h *Handler) RenameAuthKeyLabel(c *echo.Context) error {
+	if h.authKeys == nil {
+		return handleError(c, featureUnavailableError("auth keys feature is unavailable"))
+	}
+
+	var req renameAuthKeyLabelRequest
+	if err := c.Bind(&req); err != nil {
+		return handleError(c, core.NewInvalidRequestError("invalid request body: "+err.Error(), err))
+	}
+	from := strings.TrimSpace(req.From)
+	to := strings.TrimSpace(req.To)
+	if from == "" || to == "" {
+		return handleError(c, core.NewInvalidRequestError("from and to are required", nil))
+	}
+	if from == to {
+		return handleError(c, core.NewInvalidRequestError("from and to must differ", nil))
+	}
+
+	scope := requestScope(c)
+	ctx := c.Request().Context()
+	renamed := 0
+	for _, view := range h.authKeys.ListViews() {
+		if !scope.Allows(view.UserPath) {
+			continue
+		}
+		labels, found := renameLabel(view.Labels, from, to)
+		if !found {
+			continue
+		}
+		if _, err := h.authKeys.UpdateLabels(ctx, view.ID, labels); err != nil {
+			if errors.Is(err, authkeys.ErrNotFound) {
+				// The key disappeared between listing and updating; skip it.
+				continue
+			}
+			return handleError(c, authKeyWriteError(err))
+		}
+		renamed++
+	}
+	return c.JSON(http.StatusOK, renameAuthKeyLabelResponse{From: from, To: to, Renamed: renamed})
+}
+
+// renameLabel replaces every exact occurrence of from with to and reports
+// whether the list changed. Duplicates introduced by the rename are merged.
+func renameLabel(labels []string, from, to string) ([]string, bool) {
+	found := false
+	renamed := make([]string, len(labels))
+	for i, label := range labels {
+		if label == from {
+			renamed[i] = to
+			found = true
+		} else {
+			renamed[i] = label
+		}
+	}
+	if !found {
+		return nil, false
+	}
+	return core.MergeLabels(renamed), true
+}
+
 type updateAuthKeyAllowedModelsRequest struct {
 	// Pointer so an omitted or null value is rejected instead of being
 	// treated as an implicit clear of a restricted key.
