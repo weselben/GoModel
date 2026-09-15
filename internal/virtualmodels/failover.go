@@ -25,9 +25,13 @@ func (s *Service) ResolveFailovers(resolution *core.RequestModelResolution, _ co
 	}
 	snap := s.snapshot()
 	entry, ok := snap.failoverEntry(resolution)
-	if !ok || !entry.failover() || len(entry.targets) < 2 {
+	if !ok || !entry.failover() {
 		return nil
 	}
+	// The declared target count is not the chain size: a single target may
+	// name a chained redirect whose subtree holds the failover legs. The
+	// flattened leaves decide; the dedup below already removes the primary,
+	// so a redirect with no alternative leaf yields an empty chain either way.
 	seen := map[string]struct{}{resolution.ResolvedQualifiedModel(): {}}
 	chain := make([]core.ModelSelector, 0, len(entry.targets))
 	for _, leaf := range snap.leafTargets(entry, s.catalog) {
