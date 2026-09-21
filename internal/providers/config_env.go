@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/enterpilot/gomodel/config"
@@ -97,6 +98,10 @@ type providerEnvValues struct {
 	ModelFilterMaxPrice      *float64
 	SessionStickyKeys        *bool
 	FairnessFromUserPath     *bool
+	// TripOnGroups holds named trip rules from `<PROVIDER>_CIRCUIT_BREAKER_
+	// TRIP_ON_<GROUP>_MATCH|_TTL` vars. A group replaces the config rule of
+	// the same name at overlay time; other config rules survive.
+	TripOnGroups map[string]config.TripRuleConfig
 }
 
 // modelFilter assembles the filter this env group declares.
@@ -174,8 +179,91 @@ func (v providerEnvValues) empty() bool {
 		strings.TrimSpace(v.InferenceObjective) == "" &&
 		v.SessionStickyKeys == nil &&
 		v.FairnessFromUserPath == nil &&
+		len(v.TripOnGroups) == 0 &&
 		len(v.Models) == 0 &&
 		v.modelFilter().Empty()
+}
+
+// tripOnResilience assembles the raw resilience overlay this env group
+// declares, or nil when no trip rules are set. Env groups override config
+// rules by name only; rules the env does not name survive.
+func (v providerEnvValues) tripOnResilience() *config.RawResilienceConfig {
+	if len(v.TripOnGroups) == 0 {
+		return nil
+	}
+	rules := make([]config.TripRuleConfig, 0, len(v.TripOnGroups))
+	for _, rule := range v.TripOnGroups {
+		rules = append(rules, rule)
+	}
+	slices.SortFunc(rules, func(a, b config.TripRuleConfig) int {
+		return strings.Compare(a.Name, b.Name)
+	})
+	return &config.RawResilienceConfig{
+		CircuitBreaker: &config.RawCircuitBreakerConfig{
+			TripOn: config.TripRuleMapFromList(rules),
+		},
+	}
+}
+
+// mergeTripOnResilience applies env trip-rule groups onto the provider's raw
+// resilience overlay, replacing same-named config rules and keeping every
+// other YAML-declared override intact.
+func mergeTripOnResilience(existing *config.RawResilienceConfig, groups []config.TripRuleConfig) *config.RawResilienceConfig {
+	tripOn := config.TripRuleMapFromList(groups)
+	if existing == nil {
+		return &config.RawResilienceConfig{
+			CircuitBreaker: &config.RawCircuitBreakerConfig{TripOn: tripOn},
+		}
+	}
+	res := *existing
+	if res.CircuitBreaker == nil {
+		res.CircuitBreaker = &config.RawCircuitBreakerConfig{TripOn: tripOn}
+		return &res
+	}
+	cb := *res.CircuitBreaker
+	if cb.TripOn == nil {
+		cb.TripOn = tripOn
+	} else {
+		cb.TripOn = config.TripRuleMapFromList(config.MergeTripRuleGroups(cb.TripOn.List(), groups))
+	}
+	res.CircuitBreaker = &cb
+	return &res
+}
+
+// parseTripRuleEnvKey splits a provider trip-rule env var into the
+// provider-name suffix, the group name, and the attribute (MATCH or TTL):
+// <PREFIX>[_<SUFFIX>]_CIRCUIT_BREAKER_TRIP_ON_<GROUP>_<ATTR>. It mirrors the
+// API-key special case: the generic field table cannot match multi-token
+// names, so this runs ahead of it.
+func parseTripRuleEnvKey(prefix, key string) (suffix, group, attr string, ok bool) {
+	rest, found := strings.CutPrefix(key, prefix+"_")
+	if !found {
+		return "", "", "", false
+	}
+	const marker = "CIRCUIT_BREAKER_TRIP_ON_"
+	i := strings.Index(rest, marker)
+	if i < 0 {
+		return "", "", "", false
+	}
+	tail := rest[i+len(marker):]
+	switch {
+	case strings.HasSuffix(tail, "_MATCH"):
+		attr = "MATCH"
+		group = strings.TrimSuffix(tail, "_MATCH")
+	case strings.HasSuffix(tail, "_TTL"):
+		attr = "TTL"
+		group = strings.TrimSuffix(tail, "_TTL")
+	default:
+		return "", "", "", false
+	}
+	if group == "" {
+		return "", "", "", false
+	}
+	suffix = strings.TrimSuffix(rest[:i], "_")
+	if suffix != "" && !validProviderEnvSuffix(suffix) {
+		return "", "", "", false
+	}
+	return suffix, group, attr, true
 }
 
 func providerEnvSources(providerType string, spec DiscoveryConfig) []providerEnvSource {
@@ -198,6 +286,38 @@ func collectProviderEnvValues(prefix string, spec DiscoveryConfig, environ []str
 	for _, entry := range environ {
 		key, value, ok := strings.Cut(entry, "=")
 		if !ok || value == "" || !strings.HasPrefix(key, prefixWithSeparator) {
+			continue
+		}
+
+		// Trip-rule groups carry their own key shape — <PREFIX>[_<SUFFIX>]_
+		// CIRCUIT_BREAKER_TRIP_ON_<GROUP>_MATCH|_TTL — before the generic
+		// single-field parse.
+		if suffix, group, attr, isTripRule := parseTripRuleEnvKey(prefix, key); isTripRule {
+			values := groups[suffix]
+			rule := values.TripOnGroups[group]
+			rule.Name = group
+			switch attr {
+			case "MATCH":
+				rule.Match = value
+			case "TTL":
+				ttl, err := time.ParseDuration(strings.TrimSpace(value))
+				if err != nil {
+					// Fail closed: a poison rule (empty match) makes resilience
+					// validation reject the provider, the same stance as the
+					// NaN price cap, instead of silently dropping quota
+					// protection because one TTL was mistyped.
+					slog.Warn("provider trip_on env ttl is malformed and will fail validation",
+						"env_prefix", prefix, "group", group, "error", err)
+					rule = config.TripRuleConfig{Name: group}
+				} else {
+					rule.TTL = ttl
+				}
+			}
+			if values.TripOnGroups == nil {
+				values.TripOnGroups = make(map[string]config.TripRuleConfig)
+			}
+			values.TripOnGroups[group] = rule
+			groups[suffix] = values
 			continue
 		}
 
@@ -511,6 +631,7 @@ func (v providerEnvValues) rawConfig(providerType string, spec DiscoveryConfig) 
 		Models:                   rawProviderModelsFromIDs(v.Models),
 		ModelFilter:              v.modelFilter(),
 		SessionStickyKeys:        v.SessionStickyKeys,
+		Resilience:               v.tripOnResilience(),
 	}
 }
 
@@ -588,6 +709,9 @@ func overlayProviderEnvValues(existing config.RawProviderConfig, values provider
 	if values.ModelFilterMaxPrice != nil {
 		existing.ModelFilter.MaxPricePerMtok = values.ModelFilterMaxPrice
 	}
+	if len(values.TripOnGroups) > 0 {
+		existing.Resilience = mergeTripOnResilience(existing.Resilience, values.tripOnResilience().CircuitBreaker.TripOn.List())
+	}
 	return existing
 }
 
@@ -637,8 +761,17 @@ func (v providerEnvValues) withoutFieldsSetBy(existing config.RawProviderConfig)
 	drop("model_filter.include", len(v.ModelFilterInclude) > 0, len(existing.ModelFilter.Include) > 0, func() { v.ModelFilterInclude = nil })
 	drop("model_filter.exclude", len(v.ModelFilterExclude) > 0, len(existing.ModelFilter.Exclude) > 0, func() { v.ModelFilterExclude = nil })
 	drop("model_filter.max_price_per_mtok", v.ModelFilterMaxPrice != nil, existing.ModelFilter.MaxPricePerMtok != nil, func() { v.ModelFilterMaxPrice = nil })
+	drop("trip_on", len(v.TripOnGroups) > 0, rawProviderHasTripOn(existing), func() { v.TripOnGroups = nil })
 
 	return v, ignored
+}
+
+// rawProviderHasTripOn reports whether the config provider declares trip
+// rules in YAML, so a bare <PROVIDER>_TRIP_ON never borrows onto it.
+func rawProviderHasTripOn(cfg config.RawProviderConfig) bool {
+	return cfg.Resilience != nil &&
+		cfg.Resilience.CircuitBreaker != nil &&
+		cfg.Resilience.CircuitBreaker.TripOn != nil
 }
 
 // rawProviderHasResolvedModel reports whether the config provider declares at

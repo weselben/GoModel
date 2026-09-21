@@ -361,6 +361,20 @@ func TestApplyEnvOverrides(t *testing.T) {
 				assert.Equal(t, 10*time.Second, cfg.Resilience.CircuitBreaker.Timeout)
 			},
 		},
+		{
+			name: "circuit breaker trip_on override",
+			envVars: map[string]string{
+				"CIRCUIT_BREAKER_TRIP_ON_QUOTA_MATCH": "quota exceeded",
+				"CIRCUIT_BREAKER_TRIP_ON_QUOTA_TTL":   "15m",
+				"CIRCUIT_BREAKER_TRIP_ON_USAGE_MATCH": "usage limit",
+			},
+			check: func(t *testing.T, cfg *Config) {
+				assert.Equal(t, TripRuleMap{
+					"QUOTA": {Name: "QUOTA", Match: "quota exceeded", TTL: 15 * time.Minute},
+					"USAGE": {Name: "USAGE", Match: "usage limit"},
+				}, cfg.Resilience.CircuitBreaker.TripOn)
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -374,4 +388,16 @@ func TestApplyEnvOverrides(t *testing.T) {
 			tt.check(t, cfg)
 		})
 	}
+}
+
+// A malformed trip_on env group fails configuration loading instead of
+// silently dropping quota protection.
+func TestApplyEnvOverrides_TripOnInvalid(t *testing.T) {
+	t.Setenv("CIRCUIT_BREAKER_TRIP_ON_BAD_TTL_MATCH", "quota exceeded")
+	t.Setenv("CIRCUIT_BREAKER_TRIP_ON_BAD_TTL_TTL", "banana")
+
+	cfg := buildDefaultConfig()
+	err := applyEnvOverrides(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "CIRCUIT_BREAKER_TRIP_ON_BAD_TTL_TTL")
 }

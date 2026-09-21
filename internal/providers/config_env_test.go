@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/enterpilot/gomodel/config"
 	"github.com/stretchr/testify/assert"
@@ -146,4 +147,95 @@ func TestApplyProviderEnvVars_BareTypeEnvVarsAgainstRenamedProviders(t *testing.
 			assert.NotContains(t, out, envKey, "warning leaked the env api key")
 		})
 	}
+}
+
+// Named trip-rule env groups override config rules by name only; a malformed
+// value must fail resilience validation instead of silently dropping quota
+// protection.
+func TestApplyProviderEnvVars_TripOnGroups(t *testing.T) {
+	oneMinute := time.Minute
+
+	setEnv := func(t *testing.T) {
+		t.Helper()
+		t.Setenv("KIMICODE_CIRCUIT_BREAKER_TRIP_ON_QUOTA_EXCEEDED_MATCH", "quota exceeded")
+		t.Setenv("KIMICODE_CIRCUIT_BREAKER_TRIP_ON_QUOTA_EXCEEDED_TTL", "15m")
+		t.Setenv("KIMICODE_CIRCUIT_BREAKER_TRIP_ON_USAGE_LIMIT_MATCH", "usage limit")
+	}
+	wantGroups := config.TripRuleMap{
+		"QUOTA_EXCEEDED": {Name: "QUOTA_EXCEEDED", Match: "quota exceeded", TTL: 15 * time.Minute},
+		"USAGE_LIMIT":    {Name: "USAGE_LIMIT", Match: "usage limit"},
+	}
+
+	t.Run("bare type env creates provider with parsed trip rules", func(t *testing.T) {
+		setEnv(t)
+		got := applyProviderEnvVars(map[string]config.RawProviderConfig{}, map[string]DiscoveryConfig{
+			"kimicode": {DefaultBaseURL: "https://api.kimi.com/coding/v1"},
+		})
+
+		p, ok := got["kimicode"]
+		require.True(t, ok, "kimicode provider missing")
+		require.NotNil(t, p.Resilience, "resilience overlay missing")
+		require.NotNil(t, p.Resilience.CircuitBreaker, "circuit_breaker overlay missing")
+		assert.Equal(t, wantGroups, p.Resilience.CircuitBreaker.TripOn)
+	})
+
+	t.Run("env group overrides only the config rule of the same name", func(t *testing.T) {
+		t.Setenv("KIMICODE_CIRCUIT_BREAKER_TRIP_ON_QUOTA_EXCEEDED_MATCH", "quota exhausted")
+		existing := map[string]config.RawProviderConfig{
+			"kimicode": {
+				Type: "kimicode",
+				Resilience: &config.RawResilienceConfig{
+					CircuitBreaker: &config.RawCircuitBreakerConfig{
+						Timeout: &oneMinute,
+						TripOn: config.TripRuleMap{
+							"quota_exceeded": {Match: "old pattern", TTL: time.Hour},
+							"other_rule":     {Match: "yaml only", TTL: 2 * time.Hour},
+						},
+					},
+				},
+			},
+		}
+		got := applyProviderEnvVars(existing, map[string]DiscoveryConfig{"kimicode": {}})
+
+		p := got["kimicode"]
+		require.NotNil(t, p.Resilience)
+		require.NotNil(t, p.Resilience.CircuitBreaker)
+		assert.Equal(t, time.Minute, *p.Resilience.CircuitBreaker.Timeout, "YAML timeout must survive the env overlay")
+		tripOn := p.Resilience.CircuitBreaker.TripOn
+		assert.Equal(t, config.TripRuleConfig{Name: "QUOTA_EXCEEDED", Match: "quota exhausted"}, tripOn["QUOTA_EXCEEDED"], "same-named group replaces the config rule")
+		assert.Equal(t, config.TripRuleConfig{Name: "other_rule", Match: "yaml only", TTL: 2 * time.Hour}, tripOn["other_rule"], "unnamed-by-env rule survives")
+	})
+
+	t.Run("renamed provider with YAML trip_on ignores the env value", func(t *testing.T) {
+		t.Setenv("KIMICODE_CIRCUIT_BREAKER_TRIP_ON_QUOTA_MATCH", "quota exceeded")
+		yamlRules := config.TripRuleMap{"yaml": {Match: "yaml rule"}}
+		existing := map[string]config.RawProviderConfig{
+			"kimi-renamed": {
+				Type: "kimicode",
+				Resilience: &config.RawResilienceConfig{
+					CircuitBreaker: &config.RawCircuitBreakerConfig{TripOn: yamlRules},
+				},
+			},
+		}
+		logs := captureSlog(t)
+		got := applyProviderEnvVars(existing, map[string]DiscoveryConfig{"kimicode": {}})
+
+		p := got["kimi-renamed"]
+		assert.Equal(t, yamlRules, p.Resilience.CircuitBreaker.TripOn, "YAML rules must win over env")
+		assert.Contains(t, logs.String(), "trip_on")
+	})
+
+	t.Run("malformed ttl fails resilience validation", func(t *testing.T) {
+		t.Setenv("KIMICODE_CIRCUIT_BREAKER_TRIP_ON_BAD_MATCH", "quota exceeded")
+		t.Setenv("KIMICODE_CIRCUIT_BREAKER_TRIP_ON_BAD_TTL", "banana")
+		got := applyProviderEnvVars(map[string]config.RawProviderConfig{}, map[string]DiscoveryConfig{
+			"kimicode": {DefaultBaseURL: "https://api.kimi.com/coding/v1"},
+		})
+
+		p := got["kimicode"]
+		require.NotNil(t, p.Resilience)
+		require.Error(t, config.ValidateResilience(config.ResilienceConfig{
+			CircuitBreaker: config.CircuitBreakerConfig{TripOn: p.Resilience.CircuitBreaker.TripOn},
+		}), "malformed TRIP_ON group must fail validation")
+	})
 }
