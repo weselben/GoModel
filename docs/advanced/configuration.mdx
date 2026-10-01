@@ -461,6 +461,17 @@ providers that define a list and skip their upstream `/models` calls. YAML
 `providers.<name>.models` provides the same model-list input for named provider
 blocks.
 
+List entries containing `*` or `?` are glob patterns, matched
+case-insensitively against the upstream model IDs (`*` also matches `/`, so
+`*:free` matches `deepseek/deepseek-r1:free`); `*` alone takes the whole
+upstream inventory. A list with at least one pattern always queries upstream
+`/models` in every mode — the allowlist skip applies only to exact-only lists —
+and resolves to the matching upstream models plus the exact entries. When the
+upstream cannot supply an inventory, only the exact entries are used; a pattern
+is never published as a literal model ID. For example,
+`OPENROUTER_MODELS="*:free,anthropic/claude-sonnet-4"` exposes every free-tier
+model OpenRouter lists plus that one exact model.
+
 `GET /v1/models` lists provider-qualified IDs (`openai/gpt-5`) by default. Set
 `UNQUALIFIED_MODEL_IDS_AT_MODELS_ENDPOINT=true` (YAML:
 `models.unqualified_model_ids_at_models_endpoint`) to list bare model IDs

@@ -13,9 +13,12 @@ import (
 type configuredProviderModelsApplyReason string
 
 const (
-	configuredProviderModelsNotApplied    configuredProviderModelsApplyReason = ""
-	configuredProviderModelsAllowlist     configuredProviderModelsApplyReason = "allowlist"
-	configuredProviderModelsMerge         configuredProviderModelsApplyReason = "merge"
+	configuredProviderModelsNotApplied configuredProviderModelsApplyReason = ""
+	configuredProviderModelsAllowlist  configuredProviderModelsApplyReason = "allowlist"
+	configuredProviderModelsMerge      configuredProviderModelsApplyReason = "merge"
+	// configuredProviderModelsWildcard means the configured list contained glob
+	// patterns and they were resolved against a healthy upstream inventory.
+	configuredProviderModelsWildcard      configuredProviderModelsApplyReason = "wildcard"
 	configuredProviderModelsUpstreamError configuredProviderModelsApplyReason = "upstream_error"
 	// configuredProviderModelsUpstreamUnlisted means the provider has no model
 	// listing endpoint (404/405 on /models). Servers that only expose a single
@@ -64,6 +67,28 @@ func applyConfiguredProviderModels(
 	}
 
 	mode = config.ResolveConfiguredProviderModelsMode(mode)
+
+	// A list containing glob patterns resolves against the real upstream
+	// inventory in every mode: patterns are meaningless without it. When the
+	// upstream cannot supply one, only the exact entries survive — a pattern
+	// is never published as a literal model ID.
+	if hasModelPattern(configuredModels) {
+		exact, patterns := splitConfiguredModels(configuredModels)
+		if modelListingUnsupported(upstreamErr) {
+			return configuredProviderModelsResponse(providerName, providerType, exact, upstream, fallbackCreated), configuredProviderModelsUpstreamUnlisted
+		}
+		if upstreamErr != nil {
+			return configuredProviderModelsResponse(providerName, providerType, exact, upstream, fallbackCreated), configuredProviderModelsUpstreamError
+		}
+		if upstream == nil {
+			return configuredProviderModelsResponse(providerName, providerType, exact, upstream, fallbackCreated), configuredProviderModelsUpstreamNil
+		}
+		if len(upstream.Data) == 0 {
+			return configuredProviderModelsResponse(providerName, providerType, exact, upstream, fallbackCreated), configuredProviderModelsUpstreamEmpty
+		}
+		return wildcardConfiguredModelsResponse(providerName, providerType, exact, patterns, upstream, fallbackCreated), configuredProviderModelsWildcard
+	}
+
 	if mode == config.ConfiguredProviderModelsModeAllowlist {
 		return configuredProviderModelsResponse(providerName, providerType, configuredModels, upstream, fallbackCreated), configuredProviderModelsAllowlist
 	}
@@ -151,6 +176,90 @@ func mergeConfiguredProviderModelsResponse(providerName, providerType string, co
 		}
 		seen[modelID] = struct{}{}
 		data = append(data, synthesizedConfiguredModel(modelID, owner, created))
+	}
+
+	return &core.ModelsResponse{
+		Object: "list",
+		Data:   data,
+	}
+}
+
+// hasModelPattern reports whether any configured entry is a glob pattern.
+// Entries containing `*` or `?` are patterns; anything else is an exact model
+// ID (substring matching is written `*free*`, not `free`).
+func hasModelPattern(models []string) bool {
+	for _, model := range models {
+		if strings.ContainsAny(model, "*?") {
+			return true
+		}
+	}
+	return false
+}
+
+// splitConfiguredModels separates a configured model list into exact model IDs
+// and glob patterns, preserving the configured order within each group.
+func splitConfiguredModels(models []string) (exact []string, patterns []string) {
+	for _, model := range models {
+		if strings.ContainsAny(model, "*?") {
+			patterns = append(patterns, model)
+			continue
+		}
+		exact = append(exact, model)
+	}
+	return exact, patterns
+}
+
+// wildcardConfiguredModelsResponse resolves glob patterns against a healthy
+// upstream inventory: upstream entries matching at least one pattern stay in
+// upstream order with their metadata, then the exact configured entries follow
+// in configured order — reusing the upstream entry when listed there, else
+// synthesized. The registry only ever sees resolved model IDs, never patterns.
+func wildcardConfiguredModelsResponse(providerName, providerType string, exact, patterns []string, upstream *core.ModelsResponse, fallbackCreated int64) *core.ModelsResponse {
+	byID := make(map[string]core.Model, len(upstream.Data))
+	data := make([]core.Model, 0, len(upstream.Data)+len(exact))
+	appended := make(map[string]struct{}, len(upstream.Data)+len(exact))
+	for _, model := range upstream.Data {
+		modelID := strings.TrimSpace(model.ID)
+		if modelID == "" {
+			continue
+		}
+		if _, ok := byID[modelID]; ok {
+			// Upstream listings can repeat an ID (also via whitespace
+			// variants that normalize to one); the first entry wins.
+			continue
+		}
+		// Registry lookups trim requested IDs, so the retained entry must be
+		// indexed under the same normalized key it deduplicates by.
+		model.ID = modelID
+		byID[modelID] = model
+		if matchesAnyGlob(patterns, modelID) {
+			appended[modelID] = struct{}{}
+			data = append(data, model)
+		}
+	}
+
+	owner := configuredModelOwner(providerName, providerType)
+	created := normalizeFallbackCreated(fallbackCreated)
+	for _, modelID := range exact {
+		if _, ok := appended[modelID]; ok {
+			continue
+		}
+		appended[modelID] = struct{}{}
+		model, ok := byID[modelID]
+		if !ok {
+			model = synthesizedConfiguredModel(modelID, owner, created)
+		} else {
+			if strings.TrimSpace(model.Object) == "" {
+				model.Object = "model"
+			}
+			if strings.TrimSpace(model.OwnedBy) == "" {
+				model.OwnedBy = owner
+			}
+			if model.Created == 0 {
+				model.Created = created
+			}
+		}
+		data = append(data, model)
 	}
 
 	return &core.ModelsResponse{
