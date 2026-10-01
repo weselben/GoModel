@@ -875,6 +875,80 @@ func TestModelRegistry(t *testing.T) {
 	})
 }
 
+// A configured list containing glob patterns resolves against a real upstream
+// ListModels call even in allowlist mode — the skip-upstream fast-path only
+// applies to exact-only lists — and publishes only resolved matches plus the
+// exact entries, never the pattern strings.
+func TestModelRegistryWildcardConfiguredModels(t *testing.T) {
+	t.Run("PatternListQueriesUpstreamAndPublishesOnlyMatches", func(t *testing.T) {
+		registry := NewModelRegistry()
+		registry.SetConfiguredProviderModelsMode(config.ConfiguredProviderModelsModeAllowlist)
+		var listCount atomic.Int32
+		mock := &countingRegistryMockProvider{
+			listCount: &listCount,
+			registryMockProvider: &registryMockProvider{
+				name: "test",
+				modelsResponse: &core.ModelsResponse{
+					Object: "list",
+					Data: []core.Model{
+						{ID: "openai/gpt-4o:free", Object: "model", OwnedBy: "upstream", Created: 42},
+						{ID: "deepseek/deepseek-r1:free", Object: "model", OwnedBy: "upstream", Created: 43},
+						{ID: "openai/gpt-4o", Object: "model", OwnedBy: "upstream", Created: 44},
+					},
+				},
+			},
+		}
+		registry.RegisterProviderWithNameAndType(mock, "test", "test-type")
+		registry.SetProviderConfiguredModels("test", []string{"*:free", "extra-model"})
+
+		err := registry.Initialize(context.Background())
+		require.NoError(t, err)
+		require.Equal(t, int32(1), listCount.Load(), "a pattern list must query upstream /models even in allowlist mode")
+
+		require.True(t, registry.Supports("openai/gpt-4o:free"))
+		require.True(t, registry.Supports("deepseek/deepseek-r1:free"))
+		require.True(t, registry.Supports("extra-model"))
+		assert.False(t, registry.Supports("openai/gpt-4o"), "unmatched upstream model must not be published")
+		assert.False(t, registry.Supports("*:free"), "a pattern must never be published as a literal model ID")
+
+		matched := registry.GetModel("openai/gpt-4o:free")
+		require.NotNil(t, matched)
+		assert.Equal(t, int64(42), matched.Model.Created)
+		assert.Equal(t, "upstream", matched.Model.OwnedBy)
+
+		extra := registry.GetModel("extra-model")
+		require.NotNil(t, extra)
+		assert.Equal(t, "test-type", extra.Model.OwnedBy)
+
+		snapshots := registry.ProviderRuntimeSnapshots()
+		require.Len(t, snapshots, 1)
+		assert.Empty(t, snapshots[0].LastModelFetchError)
+		assert.NotNil(t, snapshots[0].LastModelFetchSuccessAt)
+		assert.NotNil(t, snapshots[0].LastAvailabilityOKAt)
+	})
+
+	t.Run("PatternListFallsBackToExactEntriesWhenUpstreamFails", func(t *testing.T) {
+		registry := NewModelRegistry()
+		mock := &registryMockProvider{
+			name: "test",
+			err:  errors.New("models unavailable"),
+		}
+		registry.RegisterProviderWithNameAndType(mock, "test", "test")
+		registry.SetProviderConfiguredModels("test", []string{"*:free", "exact-model"})
+
+		err := registry.Initialize(context.Background())
+		require.NoError(t, err)
+		require.Equal(t, 1, registry.ModelCount())
+		require.True(t, registry.Supports("exact-model"))
+		assert.False(t, registry.Supports("*:free"), "a pattern must never be published as a literal model ID")
+
+		snapshots := registry.ProviderRuntimeSnapshots()
+		require.Len(t, snapshots, 1)
+		assert.Contains(t, snapshots[0].LastModelFetchError, "models unavailable")
+		assert.Nil(t, snapshots[0].LastModelFetchSuccessAt)
+	})
+}
+
 // A provider whose refresh fails keeps serving its previous inventory, marked
 // stale: models stay resolvable for direct requests, ModelAvailable reports
 // false so load balancing skips them, and the next successful refresh clears

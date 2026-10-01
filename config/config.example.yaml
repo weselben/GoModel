@@ -33,7 +33,7 @@ models:
   enabled_by_default: true # env: MODELS_ENABLED_BY_DEFAULT; when false, models stay unavailable until an access override allows one or more user paths
   keep_only_aliases_at_models_endpoint: false # env: KEEP_ONLY_ALIASES_AT_MODELS_ENDPOINT; hide provider models from GET /v1/models and expose only enabled virtual models
   unqualified_model_ids_at_models_endpoint: false # env: UNQUALIFIED_MODEL_IDS_AT_MODELS_ENDPOINT; list bare model IDs (gpt-5) instead of provider-qualified ones (openai/gpt-5). Caveat: when two providers expose the same model ID only the provider an unqualified request routes to (the first registered one) is listed; pin a name with a virtual model (source gpt-5 -> target azure/gpt-5)
-  configured_provider_models_mode: "fallback" # env: CONFIGURED_PROVIDER_MODELS_MODE; "fallback" uses configured lists only when upstream /models is unavailable/empty, "allowlist" exposes only configured models and skips upstream /models for configured lists, "merge" adds configured models on top of the upstream inventory (for models a provider serves but does not list)
+  configured_provider_models_mode: "fallback" # env: CONFIGURED_PROVIDER_MODELS_MODE; "fallback" uses configured lists only when upstream /models is unavailable/empty, "allowlist" exposes only configured models and skips upstream /models for configured lists, "merge" adds configured models on top of the upstream inventory (for models a provider serves but does not list). Glob patterns in a list (entries containing * or ?, e.g. "*:free") bypass mode handling: they always resolve against a live upstream /models response in every mode
 
 # Tagging based on headers: label every request from the listed headers. Labels
 # are recorded in usage tracking and audit logs. A header value can carry several
@@ -691,13 +691,20 @@ providers:
   # In fallback mode (default), this list is used only if upstream /models is
   # unavailable or empty. In allowlist mode, only these models are exposed and
   # upstream /models is skipped for this provider.
-  # You can also set OPENROUTER_MODELS="openai/gpt-oss-120b,anthropic/claude-sonnet-4".
+  # Entries containing `*` or `?` are glob patterns, matched case-insensitively
+  # against the upstream model IDs (`*` also matches `/`, so "*:free" matches
+  # "deepseek/deepseek-r1:free"); "*" alone takes the whole upstream inventory.
+  # A list with at least one pattern always queries upstream /models in every
+  # mode and resolves to the matching models plus the exact entries; when the
+  # upstream cannot supply an inventory, only the exact entries are used.
+  # You can also set OPENROUTER_MODELS="*:free,anthropic/claude-sonnet-4".
   # openrouter:
   #   type: "openrouter"
   #   base_url: "https://openrouter.ai/api/v1"
   #   api_key: "${OPENROUTER_API_KEY}"
   #   models:
-  #     - openai/gpt-oss-120b
+  #     - "*:free"                  # every free-tier model upstream lists
+  #     - openai/gpt-oss-120b       # exact entries work as before
   #     - anthropic/claude-sonnet-4
   #   # Narrow the inventory to what should be routable. Patterns are globs
   #   # matched case-insensitively against the raw model ID; `*` also matches `/`,
