@@ -45,6 +45,26 @@ configured models for providers that define a list and skip their upstream
 inventory — useful for models a provider serves but does not include in its
 `/models` listing.
 
+Entries containing `*` or `?` are glob patterns, matched case-insensitively
+against the upstream model IDs (`*` also matches `/`, so `*:free` matches
+`deepseek/deepseek-r1:free`); `*` alone takes the whole upstream inventory.
+A list with at least one pattern always resolves against a live upstream
+`/models` response in every mode — the allowlist skip applies only to
+exact-only lists — and exposes the matching upstream models plus the exact
+entries. When the upstream cannot supply an inventory, only the exact entries
+are used; a pattern is never published as a literal model ID. Lists without
+patterns behave per mode as described above.
+
+```yaml
+providers:
+  openrouter:
+    type: openrouter
+    api_key: "${OPENROUTER_API_KEY}"
+    models:
+      - "*:free"                  # every free-tier model upstream lists
+      - anthropic/claude-sonnet-4 # exact entries work as before
+```
+
 ## Filtering a provider's models
 
 `model_filter` narrows a provider's inventory to the models you actually want

@@ -506,6 +506,58 @@ func TestCacheFile(t *testing.T) {
 		_, err = os.Stat(cacheFile)
 		require.False(t, os.IsNotExist(err))
 	})
+
+	// A pattern list re-expands against the cached inventory on load: cached
+	// entries matching a pattern and the exact entries are published, cached
+	// non-matches drop, and no pattern leaks through as a literal model ID.
+	t.Run("LoadFromCacheConfiguredModelPatternsReexpandAgainstCachedInventory", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		cacheFile := filepath.Join(tmpDir, "models.json")
+
+		modelCache := modelcache.ModelCache{
+			UpdatedAt: time.Now().UTC(),
+			Providers: map[string]modelcache.CachedProvider{
+				"openrouter": {
+					ProviderType: "openrouter",
+					OwnedBy:      "openrouter",
+					Models: []modelcache.CachedModel{
+						{ID: "openai/gpt-4o:free", Created: 123},
+						{ID: "deepseek/deepseek-r1:free", Created: 456},
+						{ID: "openai/gpt-4o", Created: 789},
+					},
+				},
+			},
+		}
+		data, _ := json.Marshal(modelCache)
+		err := os.WriteFile(cacheFile, data, 0o644)
+		require.NoError(t, err)
+
+		registry := NewModelRegistry()
+		registry.SetCache(modelcache.NewLocalCache(cacheFile))
+		registry.SetProviderConfiguredModels("openrouter", []string{"*:free", "extra-model"})
+
+		mock := &registryMockProvider{name: "openrouter"}
+		registry.RegisterProviderWithNameAndType(mock, "openrouter", "openrouter")
+
+		loaded, err := registry.LoadFromCache(context.Background())
+		require.NoError(t, err)
+		require.Equal(t, 3, loaded)
+
+		require.True(t, registry.Supports("openai/gpt-4o:free"))
+		require.True(t, registry.Supports("deepseek/deepseek-r1:free"))
+		require.True(t, registry.Supports("extra-model"))
+		assert.False(t, registry.Supports("openai/gpt-4o"), "cached model not matching any pattern must not load")
+		assert.False(t, registry.Supports("*:free"), "a pattern must never be published as a literal model ID")
+
+		matched := registry.GetModel("openai/gpt-4o:free")
+		require.NotNil(t, matched)
+		assert.Equal(t, int64(123), matched.Model.Created)
+		assert.Equal(t, "openrouter", matched.Model.OwnedBy, "matched model = %+v, want cached metadata preserved", matched.Model)
+
+		extra := registry.GetModel("extra-model")
+		require.NotNil(t, extra)
+		assert.Equal(t, "openrouter", extra.Model.OwnedBy)
+	})
 }
 
 func TestInitializeAsync(t *testing.T) {

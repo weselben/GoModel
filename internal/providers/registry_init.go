@@ -191,6 +191,8 @@ func (r *ModelRegistry) fetchAllProviderModels(
 				slog.Debug("using configured provider models", attrs...)
 			} else if configuredReason == configuredProviderModelsMerge {
 				slog.Debug("merged configured provider models into upstream inventory", attrs...)
+			} else if configuredReason == configuredProviderModelsWildcard {
+				slog.Debug("resolved configured provider model patterns against upstream inventory", attrs...)
 			} else {
 				slog.Warn("using configured provider models", attrs...)
 			}
@@ -256,6 +258,8 @@ func (r *ModelRegistry) fetchAllProviderModels(
 		//    inventory from configuration — reason is configuredProviderModelsAllowlist
 		//  - merge mode overlaid configured models on a healthy upstream
 		//    response — reason is configuredProviderModelsMerge
+		//  - configured glob patterns resolved against a healthy upstream
+		//    inventory — reason is configuredProviderModelsWildcard
 		//  - the upstream has no /models endpoint, so the configured list is
 		//    the whole inventory — reason is configuredProviderModelsUpstreamUnlisted
 		// Fallback cases (configured*UpstreamError, *Nil, *Empty) keep
@@ -264,15 +268,17 @@ func (r *ModelRegistry) fetchAllProviderModels(
 		if configuredReason == configuredProviderModelsNotApplied ||
 			configuredReason == configuredProviderModelsAllowlist ||
 			configuredReason == configuredProviderModelsMerge ||
+			configuredReason == configuredProviderModelsWildcard ||
 			configuredReason == configuredProviderModelsUpstreamUnlisted {
 			runtimeUpdate.lastModelFetchSuccessAt = fetchAt
 		}
-		// Merge and unlisted keep availability signals too: the upstream
-		// answered, unlike the fallback reasons. For unlisted this also clears
-		// a startup probe that hit the same missing /models endpoint before
-		// configured models were known.
+		// Merge, wildcard, and unlisted keep availability signals too: the
+		// upstream answered, unlike the fallback reasons. For unlisted this
+		// also clears a startup probe that hit the same missing /models
+		// endpoint before configured models were known.
 		if configuredReason == configuredProviderModelsNotApplied ||
 			configuredReason == configuredProviderModelsMerge ||
+			configuredReason == configuredProviderModelsWildcard ||
 			configuredReason == configuredProviderModelsUpstreamUnlisted {
 			runtimeUpdate.lastAvailabilityCheckAt = fetchAt
 			runtimeUpdate.lastAvailabilityOKAt = fetchAt
@@ -435,7 +441,9 @@ func fetchProviderInventory(
 	catalogModels []string,
 ) (*core.ModelsResponse, configuredProviderModelsApplyReason, time.Time, error) {
 	fetchAt := time.Now().UTC()
-	if mode == config.ConfiguredProviderModelsModeAllowlist && len(configuredModels) > 0 {
+	// The allowlist fast-path only applies to exact model lists: glob patterns
+	// resolve against the real upstream inventory, so /models must be queried.
+	if mode == config.ConfiguredProviderModelsModeAllowlist && len(configuredModels) > 0 && !hasModelPattern(configuredModels) {
 		resp, reason := applyConfiguredProviderModels(
 			providerName,
 			providerType,

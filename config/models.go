@@ -24,11 +24,17 @@ type ModelsConfig struct {
 	// ConfiguredProviderModelsMode controls how providers.<name>.models and
 	// provider *_MODELS env vars affect the provider model inventory.
 	// Supported values: "fallback", "allowlist", "merge". Default: "fallback".
+	// Entries may contain glob patterns ("*:free", "*"): a list with at least
+	// one pattern always queries the upstream /models endpoint and resolves
+	// patterns against it, in every mode.
 	ConfiguredProviderModelsMode ConfiguredProviderModelsMode `yaml:"configured_provider_models_mode" env:"CONFIGURED_PROVIDER_MODELS_MODE"`
 }
 
 // ConfiguredProviderModelsMode controls how explicitly configured provider
-// model lists are applied to the discovered model inventory.
+// model lists are applied to the discovered model inventory. Glob patterns
+// (entries containing `*` or `?`) in a list bypass mode handling: they always
+// resolve against the upstream /models inventory and drop to the exact
+// entries when the upstream cannot provide one.
 type ConfiguredProviderModelsMode string
 
 const (
@@ -36,7 +42,8 @@ const (
 	// upstream /models call fails or returns nothing.
 	ConfiguredProviderModelsModeFallback ConfiguredProviderModelsMode = "fallback"
 	// ConfiguredProviderModelsModeAllowlist exposes only the configured models
-	// and skips the upstream /models call.
+	// and skips the upstream /models call. The skip does not apply to lists
+	// containing glob patterns, which need the upstream inventory to resolve.
 	ConfiguredProviderModelsModeAllowlist ConfiguredProviderModelsMode = "allowlist"
 	// ConfiguredProviderModelsModeMerge unions the upstream inventory with the
 	// configured models, so models a provider serves but does not list stay
