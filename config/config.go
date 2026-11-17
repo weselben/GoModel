@@ -385,7 +385,7 @@ func Load() (*LoadResult, error) {
 	}
 	cfg.Models.ConfiguredProviderModelsMode = ResolveConfiguredProviderModelsMode(cfg.Models.ConfiguredProviderModelsMode)
 	if !cfg.Models.ConfiguredProviderModelsMode.Valid() {
-		return nil, fmt.Errorf("models.configured_provider_models_mode must be one of: fallback, allowlist, merge")
+		return nil, fmt.Errorf("models.configured_provider_models_mode must be one of: fallback, allowlist, merge, pattern")
 	}
 
 	cfg.Resilience.CircuitBreaker.Scope = NormalizeBreakerScope(cfg.Resilience.CircuitBreaker.Scope)

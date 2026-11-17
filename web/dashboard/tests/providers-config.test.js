@@ -642,14 +642,14 @@ test("models_mode renders as a select and round-trips through the payload", () =
     ...OPENAI_SCHEMA,
     fields: [
       ...OPENAI_SCHEMA.fields,
-      { name: "models_mode", required: false, advanced: true, options: ["fallback", "allowlist", "merge"] },
+      { name: "models_mode", required: false, advanced: true, options: ["fallback", "allowlist", "merge", "pattern"] },
     ],
   };
   const { advanced } = providerCredentialFormFields(schema);
   const field = advanced.find((entry) => entry.name === "models_mode");
   assert.ok(field);
   assert.equal(field.control, "select");
-  assert.deepEqual(field.options, ["fallback", "allowlist", "merge"]);
+  assert.deepEqual(field.options, ["fallback", "allowlist", "merge", "pattern"]);
 
   const form = providerCredentialRowToForm({
     name: "openrouter",
@@ -674,7 +674,7 @@ test("the schema-less fallback form still offers the models_mode values", () => 
   const field = advanced.find((entry) => entry.name === "models_mode");
   assert.ok(field);
   assert.equal(field.control, "select");
-  assert.deepEqual(field.options, ["fallback", "allowlist", "merge"]);
+  assert.deepEqual(field.options, ["fallback", "allowlist", "merge", "pattern"]);
 });
 
 test("models_mode links to the docs table comparing the modes", () => {

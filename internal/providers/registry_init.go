@@ -215,6 +215,8 @@ func (r *ModelRegistry) fetchAllProviderModels(
 				slog.Debug("using configured provider models", attrs...)
 			} else if configuredReason == configuredProviderModelsMerge {
 				slog.Debug("merged configured provider models into upstream inventory", attrs...)
+			} else if configuredReason == configuredProviderModelsPattern {
+				slog.Debug("resolved configured provider model patterns against upstream inventory", attrs...)
 			} else {
 				slog.Warn("using configured provider models", attrs...)
 			}
@@ -280,6 +282,8 @@ func (r *ModelRegistry) fetchAllProviderModels(
 		//    inventory from configuration — reason is configuredProviderModelsAllowlist
 		//  - merge mode overlaid configured models on a healthy upstream
 		//    response — reason is configuredProviderModelsMerge
+		//  - pattern mode resolved configured patterns against a healthy
+		//    upstream inventory — reason is configuredProviderModelsPattern
 		//  - the upstream has no /models endpoint, so the configured list is
 		//    the whole inventory — reason is configuredProviderModelsUpstreamUnlisted
 		// Fallback cases (configured*UpstreamError, *Nil, *Empty) keep
@@ -288,15 +292,17 @@ func (r *ModelRegistry) fetchAllProviderModels(
 		if configuredReason == configuredProviderModelsNotApplied ||
 			configuredReason == configuredProviderModelsAllowlist ||
 			configuredReason == configuredProviderModelsMerge ||
+			configuredReason == configuredProviderModelsPattern ||
 			configuredReason == configuredProviderModelsUpstreamUnlisted {
 			runtimeUpdate.lastModelFetchSuccessAt = fetchAt
 		}
-		// Merge and unlisted keep availability signals too: the upstream
-		// answered, unlike the fallback reasons. For unlisted this also clears
-		// a startup probe that hit the same missing /models endpoint before
-		// configured models were known.
+		// Merge, pattern, and unlisted keep availability signals too: the
+		// upstream answered, unlike the fallback reasons. For unlisted this
+		// also clears a startup probe that hit the same missing /models
+		// endpoint before configured models were known.
 		if configuredReason == configuredProviderModelsNotApplied ||
 			configuredReason == configuredProviderModelsMerge ||
+			configuredReason == configuredProviderModelsPattern ||
 			configuredReason == configuredProviderModelsUpstreamUnlisted {
 			runtimeUpdate.lastAvailabilityCheckAt = fetchAt
 			runtimeUpdate.lastAvailabilityOKAt = fetchAt

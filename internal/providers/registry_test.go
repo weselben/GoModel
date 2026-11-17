@@ -335,6 +335,110 @@ func TestModelRegistry(t *testing.T) {
 		require.NotNil(t, snapshots[0].LastModelFetchSuccessAt)
 	})
 
+	// Pattern mode: a list containing glob patterns resolves against a real
+	// upstream ListModels call and publishes only resolved matches plus the
+	// exact entries, never the pattern strings. The allowlist fast-path must
+	// not apply to pattern lists, even with allowlist_metadata enabled.
+	t.Run("ConfiguredModelsPatternModeExpandsPatternsAgainstUpstream", func(t *testing.T) {
+		registry := NewModelRegistry()
+		registry.SetConfiguredProviderModelsMode(config.ConfiguredProviderModelsModePattern)
+		var listCount atomic.Int32
+		mock := &countingRegistryMockProvider{
+			listCount: &listCount,
+			registryMockProvider: &registryMockProvider{
+				name: "test",
+				modelsResponse: &core.ModelsResponse{
+					Object: "list",
+					Data: []core.Model{
+						{ID: "openai/gpt-4o:free", Object: "model", OwnedBy: "upstream", Created: 42},
+						{ID: "deepseek/deepseek-r1:free", Object: "model", OwnedBy: "upstream", Created: 43},
+						{ID: "openai/gpt-4o", Object: "model", OwnedBy: "upstream", Created: 44},
+					},
+				},
+			},
+		}
+		registry.RegisterProviderWithNameAndType(mock, "test", "test-type")
+		registry.SetProviderConfiguredModels("test", []string{"*:free", "extra-model"})
+
+		err := registry.Initialize(context.Background())
+		require.NoError(t, err)
+		require.Equal(t, int32(1), listCount.Load(), "a pattern list must query upstream /models even in pattern mode")
+
+		require.True(t, registry.Supports("openai/gpt-4o:free"))
+		require.True(t, registry.Supports("deepseek/deepseek-r1:free"))
+		require.True(t, registry.Supports("extra-model"))
+		require.False(t, registry.Supports("openai/gpt-4o"), "unmatched upstream model must not be published")
+		require.False(t, registry.Supports("*:free"), "a pattern must never be published as a literal model ID")
+
+		matched := registry.GetModel("openai/gpt-4o:free")
+		require.NotNil(t, matched)
+		require.Equal(t, int64(42), matched.Model.Created)
+		require.Equal(t, "upstream", matched.Model.OwnedBy)
+
+		extra := registry.GetModel("extra-model")
+		require.NotNil(t, extra)
+		require.Equal(t, "test-type", extra.Model.OwnedBy)
+
+		snapshots := registry.ProviderRuntimeSnapshots()
+		require.Len(t, snapshots, 1)
+		require.Empty(t, snapshots[0].LastModelFetchError)
+		require.NotNil(t, snapshots[0].LastModelFetchSuccessAt)
+		require.NotNil(t, snapshots[0].LastAvailabilityOKAt)
+	})
+
+	t.Run("ConfiguredModelsPatternModeFallsBackToExactEntriesWhenUpstreamFails", func(t *testing.T) {
+		registry := NewModelRegistry()
+		registry.SetConfiguredProviderModelsMode(config.ConfiguredProviderModelsModePattern)
+		mock := &registryMockProvider{
+			name: "test",
+			err:  errors.New("models unavailable"),
+		}
+		registry.RegisterProviderWithNameAndType(mock, "test", "test")
+		registry.SetProviderConfiguredModels("test", []string{"*:free", "exact-model"})
+
+		err := registry.Initialize(context.Background())
+		require.NoError(t, err)
+		require.Equal(t, 1, registry.ModelCount())
+		require.True(t, registry.Supports("exact-model"))
+		require.False(t, registry.Supports("*:free"), "a pattern must never be published as a literal model ID")
+
+		snapshots := registry.ProviderRuntimeSnapshots()
+		require.Len(t, snapshots, 1)
+		require.Contains(t, snapshots[0].LastModelFetchError, "models unavailable")
+		require.Nil(t, snapshots[0].LastModelFetchSuccessAt)
+	})
+
+	// A pattern in an allowlist list is just a literal entry: the allowlist
+	// fast-path still applies (no /models call), and the pattern is never
+	// resolved. Use pattern mode for globs.
+	t.Run("AllowlistModeWithPatternTreatsItAsLiteral", func(t *testing.T) {
+		registry := NewModelRegistry()
+		registry.SetConfiguredProviderModelsMode(config.ConfiguredProviderModelsModeAllowlist)
+		var listCount atomic.Int32
+		mock := &countingRegistryMockProvider{
+			listCount: &listCount,
+			registryMockProvider: &registryMockProvider{
+				name: "test",
+				modelsResponse: &core.ModelsResponse{
+					Object: "list",
+					Data: []core.Model{
+						{ID: "openai/gpt-4o:free", Object: "model", OwnedBy: "upstream"},
+					},
+				},
+			},
+		}
+		registry.RegisterProviderWithNameAndType(mock, "test", "test-type")
+		registry.SetProviderConfiguredModels("test", []string{"*:free"})
+
+		err := registry.Initialize(context.Background())
+		require.NoError(t, err)
+		// The allowlist metadata call still lists upstream once (default
+		// allowlist_upstream_metadata=true), but the pattern is served as a
+		// literal entry, not resolved.
+		require.Equal(t, int32(1), listCount.Load(), "the allowlist metadata call lists upstream once")
+		require.True(t, registry.Supports("*:free"), "a pattern in allowlist mode is a literal entry")
+	})
+
 	t.Run("GetProvider", func(t *testing.T) {
 		registry := NewModelRegistry()
 		mock := &registryMockProvider{

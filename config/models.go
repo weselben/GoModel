@@ -65,6 +65,13 @@ const (
 	// configured models, so models a provider serves but does not list stay
 	// routable without hiding the discovered ones.
 	ConfiguredProviderModelsModeMerge ConfiguredProviderModelsMode = "merge"
+	// ConfiguredProviderModelsModePattern serves the exact configured entries
+	// like an allowlist, then expands configured glob patterns (entries
+	// containing `*` or `?`) against the upstream /models inventory. It always
+	// queries the upstream: a pattern is meaningless without an inventory. A
+	// pattern is never published as a literal model ID; when the upstream
+	// cannot supply one, only the exact entries survive.
+	ConfiguredProviderModelsModePattern ConfiguredProviderModelsMode = "pattern"
 )
 
 // DefaultConfiguredProviderModelsMode applies when no mode is set. A model
@@ -75,7 +82,7 @@ const DefaultConfiguredProviderModelsMode = ConfiguredProviderModelsModeAllowlis
 // Valid reports whether mode is one of the supported configured-provider-models modes.
 func (m ConfiguredProviderModelsMode) Valid() bool {
 	switch NormalizeConfiguredProviderModelsMode(m) {
-	case ConfiguredProviderModelsModeFallback, ConfiguredProviderModelsModeAllowlist, ConfiguredProviderModelsModeMerge:
+	case ConfiguredProviderModelsModeFallback, ConfiguredProviderModelsModeAllowlist, ConfiguredProviderModelsModeMerge, ConfiguredProviderModelsModePattern:
 		return true
 	default:
 		return false
