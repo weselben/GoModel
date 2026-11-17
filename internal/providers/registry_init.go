@@ -55,19 +55,29 @@ func (r *ModelRegistry) initialize(ctx context.Context) error {
 	}
 
 	if fetched.totalModels == 0 {
-		// Deliberately keep the previous inventory fresh (no swap, no stale
-		// marking): when the whole sweep failed there is no healthy provider
-		// left to route to, so marking everything stale would only turn
-		// per-request 502/503s at the providers into 404s from an emptied
-		// virtual-model resolution. It also covers control-plane-only
-		// outages where /models is unreachable but inference still works.
-		// Individual providers are still marked stale by the per-provider
-		// recheck path as soon as a healthy alternative reappears.
-		r.applyFetchedProviderRuntimeUpdates(&fetched)
-		if fetched.failedProviders == len(providers) {
-			return fmt.Errorf("failed to fetch models from any provider")
+		// A provider whose pattern-mode resolution against a healthy
+		// upstream resolved to zero models is authoritative-empty, not
+		// failed: its empty inventory is the truth and must be applied
+		// (dropping any previous inventory), not kept fresh.
+		if !fetched.hasAuthoritativeEmpty() {
+			// Deliberately keep the previous inventory fresh (no swap, no stale
+			// marking): when the whole sweep failed there is no healthy provider
+			// left to route to, so marking everything stale would only turn
+			// per-request 502/503s at the providers into 404s from an emptied
+			// virtual-model resolution. It also covers control-plane-only
+			// outages where /models is unreachable but inference still works.
+			// Individual providers are still marked stale by the per-provider
+			// recheck path as soon as a healthy alternative reappears.
+			r.applyFetchedProviderRuntimeUpdates(&fetched)
+			if fetched.failedProviders == len(providers) {
+				return fmt.Errorf("failed to fetch models from any provider")
+			}
+			return fmt.Errorf("no models available: providers returned empty model lists")
 		}
-		return fmt.Errorf("no models available: providers returned empty model lists")
+		// Authoritative-empty providers must still have their empty
+		// inventory applied (clearing stale entries).
+		r.applyFetchedInventory(providerTypes, fetched, len(providers))
+		return nil
 	}
 
 	r.applyFetchedInventory(providerTypes, fetched, len(providers))
@@ -98,6 +108,18 @@ type fetchedInventory struct {
 	sourceProviders  map[string]core.Provider
 	totalModels      int
 	failedProviders  int
+	// authoritativeEmptyProviders names providers whose pattern-mode
+	// resolution against a healthy upstream resolved to zero models: the
+	// empty inventory is the truth, not a failure.
+	authoritativeEmptyProviders map[string]bool
+}
+
+// hasAuthoritativeEmpty reports whether any provider in the sweep
+// resolved its pattern-mode inventory to zero models against a healthy
+// upstream — an authoritative empty that must clear the previous
+// inventory instead of carrying it forward as stale.
+func (f fetchedInventory) hasAuthoritativeEmpty() bool {
+	return len(f.authoritativeEmptyProviders) > 0
 }
 
 // providerListingTimeout bounds one provider's model listing within a full
@@ -124,10 +146,11 @@ func (r *ModelRegistry) fetchAllProviderModels(
 	listingTimeout time.Duration,
 ) fetchedInventory {
 	out := fetchedInventory{
-		models:           make(map[string]*ModelInfo),
-		modelsByProvider: make(map[string]map[string]*ModelInfo),
-		runtimeUpdates:   make(map[string]providerRuntimeState),
-		sourceProviders:  make(map[string]core.Provider),
+		models:                      make(map[string]*ModelInfo),
+		modelsByProvider:            make(map[string]map[string]*ModelInfo),
+		runtimeUpdates:              make(map[string]providerRuntimeState),
+		sourceProviders:             make(map[string]core.Provider),
+		authoritativeEmptyProviders: make(map[string]bool),
 	}
 
 	names := make([]string, len(providers))
@@ -156,6 +179,10 @@ func (r *ModelRegistry) fetchAllProviderModels(
 		configuredReason configuredProviderModelsApplyReason
 		fetchAt          time.Time
 		err              error
+		// authoritativeEmpty marks a pattern-mode resolution against a
+		// healthy upstream that resolved to zero models: the empty
+		// inventory is the truth, not a failure.
+		authoritativeEmpty bool
 	}
 	allowlistMetadata := r.allowlistMetadataEnabled()
 	lastListings := r.lastProviderListings(names, configuredProviderModels)
@@ -181,7 +208,7 @@ func (r *ModelRegistry) fetchAllProviderModels(
 				allowlistMetadata: allowlistMetadata,
 				lastListing:       lastListings[names[i]],
 			})
-			results[i] = fetchResult{resp: resp, configuredReason: configuredReason, fetchAt: fetchAt, err: err}
+			results[i] = fetchResult{resp: resp, configuredReason: configuredReason, fetchAt: fetchAt, err: err, authoritativeEmpty: configuredReason == configuredProviderModelsPattern && err == nil && resp != nil && len(resp.Data) == 0}
 		}(i, provider)
 	}
 	wg.Wait()
@@ -252,6 +279,27 @@ func (r *ModelRegistry) fetchAllProviderModels(
 		}
 
 		if len(resp.Data) == 0 {
+			// A pattern-mode resolution against a healthy upstream is
+			// authoritative even when it matches nothing: the patterns
+			// resolved to zero models, so the empty inventory is the
+			// truth and any previous inventory must be dropped (not
+			// carried forward as stale). All other empty results are
+			// failures.
+			if results[i].authoritativeEmpty {
+				slog.Info("pattern mode resolved to an empty inventory; dropping previous models",
+					"provider", providerName,
+				)
+				out.authoritativeEmptyProviders[providerName] = true
+				out.runtimeUpdates[providerName] = providerRuntimeState{
+					registered:              true,
+					lastModelFetchAt:        fetchAt,
+					lastModelFetchSuccessAt: fetchAt,
+				}
+				if _, ok := out.modelsByProvider[providerName]; !ok {
+					out.modelsByProvider[providerName] = make(map[string]*ModelInfo)
+				}
+				continue
+			}
 			err := errors.New("provider returned empty model list")
 			slog.Warn("provider returned empty model list",
 				"provider", providerName,
@@ -374,6 +422,11 @@ func (r *ModelRegistry) applyFetchedInventory(
 	for _, name := range r.providerOrderNamesLocked() {
 		if len(fetched.modelsByProvider[name]) > 0 {
 			continue // this sweep produced authoritative inventory
+		}
+		// An authoritative-empty pattern resolution is the truth: the
+		// empty map stays, the previous inventory is dropped.
+		if fetched.authoritativeEmptyProviders[name] {
+			continue
 		}
 		// An empty listing is recorded as a failed fetch, so it carries the
 		// previous inventory forward like an error does instead of erasing it.

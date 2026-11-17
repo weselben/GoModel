@@ -1822,7 +1822,7 @@
   "providers_service_account_json_base64_hint": "Zapisane wartości są zamaskowane; pozostaw gwiazdki bez zmian, aby zachować wartość.",
   "providers_models_hint": "Pozostaw puste, aby automatycznie wykryć modele z endpointu /models dostawcy, jeśli jest obsługiwany. Przy domyślnym trybie modeli (allowlist) udostępniane są tylko te modele; wybierz fallback lub merge, aby zachować automatyczne wykrywanie.",
   "providers_models_mode": "Tryb modeli",
-  "providers_models_mode_hint": "How the Models list is used. allowlist: expose only these models; /models is read only for their metadata. fallback: only when the provider's /models call fails or returns nothing. merge: add them to the discovered models. pattern: like allowlist, but entries containing * or ? are globs expanded against the provider's /models inventory (e.g. \"*:free\" resolves to every free model); exact entries are kept as-is. Default uses the gateway-wide CONFIGURED_PROVIDER_MODELS_MODE (allowlist unless set).",
+  "providers_models_mode_hint": "Jak używana jest lista modeli. allowlist: udostępnij tylko te modele; /models jest odczytywany tylko dla ich metadanych. fallback: tylko gdy wywołanie /models dostawcy zawodzi lub nie zwraca niczego. merge: dodaj je do wykrytych modeli. pattern: jak allowlist, ale wpisy zawierające * lub ? to glogi rozwijane względem inwentarza /models dostawcy (np. \"*:free\" dla wszystkich darmowych modeli); dokładne wpisy pozostają bez zmian. Domyślne jest gateway-wide CONFIGURED_PROVIDER_MODELS_MODE (allowlist, jeśli nie ustawione).",
   "providers_models_mode_docs": "Porównaj tryby modeli w dokumentacji",
   "providers_default_value": "Domyślnie: {value}",
   "providers_keys_count": [

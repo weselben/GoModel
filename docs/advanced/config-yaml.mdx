@@ -61,7 +61,8 @@ matched case-insensitively against upstream model IDs:
   `deepseek/deepseek-r1:free` as well as `gpt-4o:free`
 - `?` matches exactly one character
 - `*` alone takes the whole upstream inventory
-- matching is substring-based, so write `*free*` for "contains free"
+- a pattern matches the whole model ID, not a substring: write `*free*` for
+  "contains free" — `free*` does not match `vendor/free-model`
 
 ```yaml
 providers:

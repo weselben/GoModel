@@ -439,6 +439,60 @@ func TestModelRegistry(t *testing.T) {
 		require.True(t, registry.Supports("*:free"), "a pattern in allowlist mode is a literal entry")
 	})
 
+	// A pattern-mode resolution against a healthy upstream that matches
+	// nothing is authoritative: the empty inventory is the truth and any
+	// previous inventory must be dropped, not carried forward as stale.
+	t.Run("ConfiguredModelsPatternModeEmptyResolutionIsAuthoritative", func(t *testing.T) {
+		registry := NewModelRegistry()
+		registry.SetConfiguredProviderModelsMode(config.ConfiguredProviderModelsModePattern)
+
+		// First sweep: pattern matches one model.
+		first := &registryMockProvider{
+			name: "test",
+			modelsResponse: &core.ModelsResponse{
+				Object: "list",
+				Data: []core.Model{
+					{ID: "vendor/model:free", Object: "model", OwnedBy: "upstream", Created: 42},
+					{ID: "vendor/model:paid", Object: "model", OwnedBy: "upstream", Created: 43},
+				},
+			},
+		}
+		registry.RegisterProviderWithNameAndType(first, "test", "test-type")
+		registry.SetProviderConfiguredModels("test", []string{"*:free"})
+
+		err := registry.Initialize(context.Background())
+		require.NoError(t, err)
+		require.True(t, registry.Supports("vendor/model:free"))
+
+		// Second sweep: upstream now only lists the paid model. Pattern
+		// resolution is empty — authoritative, so the old :free model must
+		// be gone from the registry.
+		second := &registryMockProvider{
+			name: "test",
+			modelsResponse: &core.ModelsResponse{
+				Object: "list",
+				Data: []core.Model{
+					{ID: "vendor/model:paid", Object: "model", OwnedBy: "upstream", Created: 44},
+				},
+			},
+		}
+		registry.mu.Lock()
+		registry.providers = []core.Provider{second}
+		registry.providerNames = map[core.Provider]string{second: "test"}
+		registry.providerTypes = map[core.Provider]string{second: "test-type"}
+		registry.mu.Unlock()
+
+		err = registry.Initialize(context.Background())
+		require.NoError(t, err)
+		require.False(t, registry.Supports("vendor/model:free"), "a pattern that no longer matches must drop the old inventory")
+		require.Equal(t, 0, registry.ModelCount())
+
+		snapshots := registry.ProviderRuntimeSnapshots()
+		require.Len(t, snapshots, 1)
+		assert.Empty(t, snapshots[0].LastModelFetchError)
+		assert.NotNil(t, snapshots[0].LastModelFetchSuccessAt)
+	})
+
 	t.Run("GetProvider", func(t *testing.T) {
 		registry := NewModelRegistry()
 		mock := &registryMockProvider{
