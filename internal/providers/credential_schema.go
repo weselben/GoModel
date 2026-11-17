@@ -118,6 +118,7 @@ func credentialSchema(providerType string, spec DiscoveryConfig) CredentialSchem
 			string(config.ConfiguredProviderModelsModeFallback),
 			string(config.ConfiguredProviderModelsModeAllowlist),
 			string(config.ConfiguredProviderModelsModeMerge),
+			string(config.ConfiguredProviderModelsModePattern),
 		}},
 		CredentialField{Name: CredentialFieldBillable, Advanced: true})
 	return schema

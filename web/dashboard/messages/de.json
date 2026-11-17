@@ -56,8 +56,13 @@
   "playground_meta_tokens": "Eingabe {input} / Ausgabe {output}",
   "playground_meta_events": [
     {
-      "declarations": ["input count", "local count_plural = count: plural"],
-      "selectors": ["count_plural"],
+      "declarations": [
+        "input count",
+        "local count_plural = count: plural"
+      ],
+      "selectors": [
+        "count_plural"
+      ],
       "match": {
         "count_plural=one": "{count} Stream-Event",
         "count_plural=*": "{count} Stream-Events"
@@ -94,8 +99,13 @@
   "playground_embeddings_base64_value": "Base64-kodierter Vektor (siehe Response-JSON)",
   "playground_embeddings_vectors": [
     {
-      "declarations": ["input count", "local count_plural = count: plural"],
-      "selectors": ["count_plural"],
+      "declarations": [
+        "input count",
+        "local count_plural = count: plural"
+      ],
+      "selectors": [
+        "count_plural"
+      ],
       "match": {
         "count_plural=one": "{count} Vektor",
         "count_plural=*": "{count} Vektoren"
@@ -104,8 +114,13 @@
   ],
   "playground_embeddings_dimensions": [
     {
-      "declarations": ["input count", "local count_plural = count: plural"],
-      "selectors": ["count_plural"],
+      "declarations": [
+        "input count",
+        "local count_plural = count: plural"
+      ],
+      "selectors": [
+        "count_plural"
+      ],
       "match": {
         "count_plural=one": "{count} Dimension",
         "count_plural=*": "{count} Dimensionen"
@@ -114,8 +129,13 @@
   ],
   "playground_embeddings_rows": [
     {
-      "declarations": ["input count", "local count_plural = count: plural"],
-      "selectors": ["count_plural"],
+      "declarations": [
+        "input count",
+        "local count_plural = count: plural"
+      ],
+      "selectors": [
+        "count_plural"
+      ],
       "match": {
         "count_plural=one": "{count} Token-Vektor",
         "count_plural=*": "{count} Token-Vektoren"
@@ -124,8 +144,13 @@
   ],
   "playground_embeddings_prompt_tokens": [
     {
-      "declarations": ["input count", "local count_plural = count: plural"],
-      "selectors": ["count_plural"],
+      "declarations": [
+        "input count",
+        "local count_plural = count: plural"
+      ],
+      "selectors": [
+        "count_plural"
+      ],
       "match": {
         "count_plural=one": "{count} Prompt-Token",
         "count_plural=*": "{count} Prompt-Tokens"
@@ -365,8 +390,13 @@
   "audit_retention_indefinitely": "unbefristet",
   "audit_retention_days": [
     {
-      "declarations": ["input count", "local count_plural = count: plural"],
-      "selectors": ["count_plural"],
+      "declarations": [
+        "input count",
+        "local count_plural = count: plural"
+      ],
+      "selectors": [
+        "count_plural"
+      ],
       "match": {
         "count_plural=one": "{count} Tag",
         "count_plural=*": "{count} Tage"
@@ -433,8 +463,13 @@
   "audit_live_pause_pagination": "Live pausiert auf späteren Seiten. Gehe zur ersten Seite, um fortzufahren.",
   "audit_session_description": [
     {
-      "declarations": ["input count", "local count_plural = count: plural"],
-      "selectors": ["count_plural"],
+      "declarations": [
+        "input count",
+        "local count_plural = count: plural"
+      ],
+      "selectors": [
+        "count_plural"
+      ],
       "match": {
         "count_plural=one": "Sitzung mit {count} Anfrage",
         "count_plural=*": "Sitzung mit {count} Anfragen"
@@ -467,8 +502,13 @@
   "audit_model_strip_copy_label": "Modell {model} kopieren ({label})",
   "audit_provider_attempts": [
     {
-      "declarations": ["input count", "local count_plural = count: plural"],
-      "selectors": ["count_plural"],
+      "declarations": [
+        "input count",
+        "local count_plural = count: plural"
+      ],
+      "selectors": [
+        "count_plural"
+      ],
       "match": {
         "count_plural=one": "{count} Anbieterversuch",
         "count_plural=*": "{count} Anbieterversuche"
@@ -641,8 +681,13 @@
   "overview_no_data": "keine Daten",
   "overview_provider_attention": [
     {
-      "declarations": ["input count", "local count_plural = count: plural"],
-      "selectors": ["count_plural"],
+      "declarations": [
+        "input count",
+        "local count_plural = count: plural"
+      ],
+      "selectors": [
+        "count_plural"
+      ],
       "match": {
         "count_plural=one": "{count} braucht Aufmerksamkeit",
         "count_plural=*": "{count} brauchen Aufmerksamkeit"
@@ -651,8 +696,13 @@
   ],
   "overview_mcp_attention": [
     {
-      "declarations": ["input count", "local count_plural = count: plural"],
-      "selectors": ["count_plural"],
+      "declarations": [
+        "input count",
+        "local count_plural = count: plural"
+      ],
+      "selectors": [
+        "count_plural"
+      ],
       "match": {
         "count_plural=one": "{count} Server braucht Aufmerksamkeit",
         "count_plural=*": "{count} Server brauchen Aufmerksamkeit"
@@ -903,8 +953,13 @@
   "api_keys_no_match": "Keine API-Schlüssel entsprechen dem aktuellen Filter.",
   "api_keys_hidden": [
     {
-      "declarations": ["input count", "local count_plural = count: plural"],
-      "selectors": ["count_plural"],
+      "declarations": [
+        "input count",
+        "local count_plural = count: plural"
+      ],
+      "selectors": [
+        "count_plural"
+      ],
       "match": {
         "count_plural=one": "{count} inaktiver Schlüssel ist ausgeblendet.",
         "count_plural=*": "{count} inaktive Schlüssel sind ausgeblendet."
@@ -1106,8 +1161,13 @@
   "workflows_no_match": "Keine Workflows entsprechen deinem Filter.",
   "workflows_active_scopes": [
     {
-      "declarations": ["input count", "local count_plural = count: plural"],
-      "selectors": ["count_plural"],
+      "declarations": [
+        "input count",
+        "local count_plural = count: plural"
+      ],
+      "selectors": [
+        "count_plural"
+      ],
       "match": {
         "count_plural=one": "{count} aktiver Geltungsbereich",
         "count_plural=*": "{count} aktive Geltungsbereiche"
@@ -1275,8 +1335,13 @@
   "settings_runtime_refresh_summary": "{status} {models} · {providers}.",
   "settings_runtime_refresh_models": [
     {
-      "declarations": ["input count", "local count_plural = count: plural"],
-      "selectors": ["count_plural"],
+      "declarations": [
+        "input count",
+        "local count_plural = count: plural"
+      ],
+      "selectors": [
+        "count_plural"
+      ],
       "match": {
         "count_plural=one": "{count} Modell",
         "count_plural=*": "{count} Modelle"
@@ -1285,8 +1350,13 @@
   ],
   "settings_runtime_refresh_providers": [
     {
-      "declarations": ["input count", "local count_plural = count: plural"],
-      "selectors": ["count_plural"],
+      "declarations": [
+        "input count",
+        "local count_plural = count: plural"
+      ],
+      "selectors": [
+        "count_plural"
+      ],
       "match": {
         "count_plural=one": "{count} Anbieter",
         "count_plural=*": "{count} Anbieter"
@@ -1313,8 +1383,14 @@
   "settings_pricing_failed": "Preise konnten nicht neu berechnet werden.",
   "settings_pricing_summary": [
     {
-      "declarations": ["input matched", "input recalculated", "local matched_plural = matched: plural"],
-      "selectors": ["matched_plural"],
+      "declarations": [
+        "input matched",
+        "input recalculated",
+        "local matched_plural = matched: plural"
+      ],
+      "selectors": [
+        "matched_plural"
+      ],
       "match": {
         "matched_plural=one": "Preise für {recalculated} von {matched} Nutzungseintrag neu berechnet.",
         "matched_plural=*": "Preise für {recalculated} von {matched} Nutzungseinträgen neu berechnet."
@@ -1323,8 +1399,13 @@
   ],
   "settings_pricing_missing": [
     {
-      "declarations": ["input count", "local count_plural = count: plural"],
-      "selectors": ["count_plural"],
+      "declarations": [
+        "input count",
+        "local count_plural = count: plural"
+      ],
+      "selectors": [
+        "count_plural"
+      ],
       "match": {
         "count_plural=one": "{count} Nutzungseintrag hat weiterhin keine Preis-Metadaten.",
         "count_plural=*": "{count} Nutzungseinträge haben weiterhin keine Preis-Metadaten."
@@ -1343,8 +1424,14 @@
   "sidebar_license_days_over_short": "-{count} T",
   "sidebar_license_trial_left": [
     {
-      "declarations": ["input count", "input date", "local count_plural = count: plural"],
-      "selectors": ["count_plural"],
+      "declarations": [
+        "input count",
+        "input date",
+        "local count_plural = count: plural"
+      ],
+      "selectors": [
+        "count_plural"
+      ],
       "match": {
         "count_plural=one": "Testversion endet am {date} - noch {count} Tag",
         "count_plural=*": "Testversion endet am {date} - noch {count} Tage"
@@ -1353,8 +1440,14 @@
   ],
   "sidebar_license_expires_in": [
     {
-      "declarations": ["input count", "input date", "local count_plural = count: plural"],
-      "selectors": ["count_plural"],
+      "declarations": [
+        "input count",
+        "input date",
+        "local count_plural = count: plural"
+      ],
+      "selectors": [
+        "count_plural"
+      ],
       "match": {
         "count_plural=one": "Lizenz läuft am {date} ab - noch {count} Tag",
         "count_plural=*": "Lizenz läuft am {date} ab - noch {count} Tage"
@@ -1363,8 +1456,14 @@
   ],
   "sidebar_license_grace": [
     {
-      "declarations": ["input count", "input date", "local count_plural = count: plural"],
-      "selectors": ["count_plural"],
+      "declarations": [
+        "input count",
+        "input date",
+        "local count_plural = count: plural"
+      ],
+      "selectors": [
+        "count_plural"
+      ],
       "match": {
         "count_plural=one": "Lizenz am {date} abgelaufen. Kulanzfrist: noch {count} Tag, dann werden die Pro-Funktionen deaktiviert",
         "count_plural=*": "Lizenz am {date} abgelaufen. Kulanzfrist: noch {count} Tage, dann werden die Pro-Funktionen deaktiviert"
@@ -1403,8 +1502,13 @@
   "pagination_summary": "{start}–{end} von {total} werden angezeigt",
   "date_picker_last_days": [
     {
-      "declarations": ["input count", "local count_plural = count: plural"],
-      "selectors": ["count_plural"],
+      "declarations": [
+        "input count",
+        "local count_plural = count: plural"
+      ],
+      "selectors": [
+        "count_plural"
+      ],
       "match": {
         "count_plural=one": "Letzter Tag",
         "count_plural=*": "Letzte {count} Tage"
@@ -1413,8 +1517,13 @@
   ],
   "date_picker_days": [
     {
-      "declarations": ["input count", "local count_plural = count: plural"],
-      "selectors": ["count_plural"],
+      "declarations": [
+        "input count",
+        "local count_plural = count: plural"
+      ],
+      "selectors": [
+        "count_plural"
+      ],
       "match": {
         "count_plural=one": "{count} Tag",
         "count_plural=*": "{count} Tage"
@@ -1486,8 +1595,13 @@
   "api_keys_effective_none": "Keine",
   "api_keys_effective_count": [
     {
-      "declarations": ["input count", "local count_plural = count: plural"],
-      "selectors": ["count_plural"],
+      "declarations": [
+        "input count",
+        "local count_plural = count: plural"
+      ],
+      "selectors": [
+        "count_plural"
+      ],
       "match": {
         "count_plural=one": "{count} Modell",
         "count_plural=*": "{count} Modelle"
@@ -1526,8 +1640,13 @@
   "users_effective_none": "Keine",
   "users_effective_count": [
     {
-      "declarations": ["input count", "local count_plural = count: plural"],
-      "selectors": ["count_plural"],
+      "declarations": [
+        "input count",
+        "local count_plural = count: plural"
+      ],
+      "selectors": [
+        "count_plural"
+      ],
       "match": {
         "count_plural=one": "{count} Modell",
         "count_plural=*": "{count} Modelle"
@@ -1721,13 +1840,18 @@
   "providers_service_account_json_base64_hint": "Gespeicherte Werte sind maskiert; lasse die Sternchen unverändert, um den gespeicherten Wert beizubehalten.",
   "providers_models_hint": "Leer lassen, um Modelle über den /models-Endpoint des Anbieters automatisch zu erkennen, sofern unterstützt. Mit dem Standard-Modellmodus (allowlist) werden nur diese Modelle angeboten; wähle fallback oder merge, um die automatische Erkennung beizubehalten.",
   "providers_models_mode": "Modellmodus",
-  "providers_models_mode_hint": "Wie die Modellliste verwendet wird. allowlist: nur diese Modelle anbieten; /models wird nur für ihre Metadaten gelesen. fallback: nur wenn der /models-Aufruf des Anbieters fehlschlägt oder nichts liefert. merge: sie zu den erkannten Modellen hinzufügen. Standard verwendet das gatewayweite CONFIGURED_PROVIDER_MODELS_MODE (allowlist, sofern nicht gesetzt).",
+  "providers_models_mode_hint": "Wie die Modellliste verwendet wird. allowlist: nur diese Modelle anbieten; /models wird nur für ihre Metadaten gelesen. fallback: nur wenn der /models-Aufruf des Anbieters fehlschlägt oder nichts liefert. merge: sie zu den gefundenen Modellen hinzufügen. pattern: wie allowlist, aber Einträge mit * oder ? sind Globs, die gegen das /models-Inventar des Anbieters aufgelöst werden (z. B. \"*:free\" für alle kostenlosen Modelle); exakte Einträge bleiben unverändert. Standard ist das gateway-weite CONFIGURED_PROVIDER_MODELS_MODE (allowlist, falls nicht gesetzt).",
   "providers_models_mode_docs": "Modellmodi in der Dokumentation vergleichen",
   "providers_default_value": "Standard ist {value}",
   "providers_keys_count": [
     {
-      "declarations": ["input count", "local count_plural = count: plural"],
-      "selectors": ["count_plural"],
+      "declarations": [
+        "input count",
+        "local count_plural = count: plural"
+      ],
+      "selectors": [
+        "count_plural"
+      ],
       "match": {
         "count_plural=one": "{count} Schlüssel",
         "count_plural=*": "{count} Schlüssel"
@@ -1739,8 +1863,13 @@
   "providers_auto_discovered": "automatisch erkannt",
   "providers_models_count": [
     {
-      "declarations": ["input count", "local count_plural = count: plural"],
-      "selectors": ["count_plural"],
+      "declarations": [
+        "input count",
+        "local count_plural = count: plural"
+      ],
+      "selectors": [
+        "count_plural"
+      ],
       "match": {
         "count_plural=one": "{count} Modell",
         "count_plural=*": "{count} Modelle"
@@ -1785,8 +1914,13 @@
   "models_allowed_for": "Erlaubt für {paths}",
   "models_count": [
     {
-      "declarations": ["input count", "local count_plural = count: plural"],
-      "selectors": ["count_plural"],
+      "declarations": [
+        "input count",
+        "local count_plural = count: plural"
+      ],
+      "selectors": [
+        "count_plural"
+      ],
       "match": {
         "count_plural=one": "{count} Modell",
         "count_plural=*": "{count} Modelle"
@@ -1795,8 +1929,13 @@
   ],
   "models_alias_count": [
     {
-      "declarations": ["input count", "local count_plural = count: plural"],
-      "selectors": ["count_plural"],
+      "declarations": [
+        "input count",
+        "local count_plural = count: plural"
+      ],
+      "selectors": [
+        "count_plural"
+      ],
       "match": {
         "count_plural=one": "{count} Alias",
         "count_plural=*": "{count} Aliase"

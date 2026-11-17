@@ -102,9 +102,9 @@ func TestValidateCredential_ModelsMode(t *testing.T) {
 	field, ok := schema.Field(CredentialFieldModelsMode)
 	require.True(t, ok)
 	assert.True(t, field.Advanced)
-	assert.Equal(t, []string{"fallback", "allowlist", "merge"}, field.Options)
+	assert.Equal(t, []string{"fallback", "allowlist", "merge", "pattern"}, field.Options)
 
-	for _, mode := range []string{"", "fallback", "allowlist", "merge"} {
+	for _, mode := range []string{"", "fallback", "allowlist", "merge", "pattern"} {
 		require.NoError(t, validateCredential(ManagedProviderCredential{Name: "p", Type: "openai", ModelsMode: mode}, schema), "mode %q", mode)
 	}
 	err := validateCredential(ManagedProviderCredential{Name: "p", Type: "openai", ModelsMode: "only"}, schema)

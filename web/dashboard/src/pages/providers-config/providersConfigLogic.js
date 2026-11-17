@@ -26,7 +26,7 @@ export const FIELD_MODELS_MODE = "models_mode";
 // The models_mode values, mirroring internal/providers/credential_schema.go.
 // The schema serves them; the schema-less fallback form needs them too, or its
 // select would offer only the default.
-const MODELS_MODE_OPTIONS = ["fallback", "allowlist", "merge"];
+const MODELS_MODE_OPTIONS = ["fallback", "allowlist", "merge", "pattern"];
 
 // The docs table comparing the models modes, linked from the field's "?".
 export const MODELS_MODE_DOCS_URL =
