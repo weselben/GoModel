@@ -48,8 +48,43 @@ example `OPENROUTER_MODELS`, `ORACLE_MODELS`, `AZURE_MODELS`, `SGLANG_MODELS`,
 | `allowlist` (default) | Only your list | You want exactly these models, e.g. one model from OpenRouter |
 | `fallback` | The upstream list; your list only if `/models` fails or returns nothing | `/models` is sometimes unavailable, but discovery should drive the list |
 | `merge` | The upstream list plus your models it doesn't include; falls back like `fallback` when `/models` fails | A provider serves models it does not list (preview or unlisted IDs) |
+| `pattern` | Your exact entries plus every upstream model matching your glob patterns | You want a dynamic allowlist, e.g. "every free model" that survives new upstream releases |
 
 With `allowlist`, only the configured IDs are served: models the provider lists but you didn't configure are never added, and requests for any other model return 404 (model not found). To let discovery drive the list again, set `CONFIGURED_PROVIDER_MODELS_MODE=fallback`, or override one provider with `<PROVIDER>[_SUFFIX]_MODELS_MODE` / `models_mode`.
+
+#### Glob patterns (`pattern` mode)
+
+In `pattern` mode, list entries containing `*` or `?` are glob patterns,
+matched case-insensitively against upstream model IDs:
+
+- `*` matches any run of characters, **including `/`** — so `*:free` matches
+  `deepseek/deepseek-r1:free` as well as `gpt-4o:free`
+- `?` matches exactly one character
+- `*` alone takes the whole upstream inventory
+- matching is substring-based, so write `*free*` for "contains free"
+
+```yaml
+providers:
+  openrouter:
+    type: openrouter
+    api_key: "${OPENROUTER_API_KEY}"
+    models_mode: pattern # env: OPENROUTER_MODELS_MODE
+    models:
+      - "*:free"                    # every free-tier model upstream lists
+      - anthropic/claude-sonnet-4   # exact entries work as before
+```
+
+Pattern mode always queries the upstream `/models` — a pattern is
+meaningless without an inventory. The result is your exact entries plus
+every matching upstream model, with the upstream's metadata (context
+window, pricing). When the upstream cannot supply a listing, patterns are
+dropped with a warning and only the exact entries survive — a pattern is
+never published as a literal model ID, and a pattern that matches nothing
+also logs a warning.
+
+Patterns apply **only in `pattern` mode**. In the other modes an entry
+containing `*` or `?` is an ordinary, unroutable literal ID — switch the
+mode or the provider's `models_mode` to `pattern` to resolve it.
 
 `fallback` and `merge` read the provider's `/models` on every refresh. `allowlist` reads it only for metadata — context window, max output tokens, pricing, display name, and model type — for your listed models, while `ALLOWLIST_UPSTREAM_METADATA` is `true` (the default; YAML: `models.allowlist_upstream_metadata`) and `GOMODEL_OFFLINE` is off. That call never adds models, but upstream prices can decide which configured models pass a `model_filter.max_price_per_mtok` cap. If it fails, the metadata from the last successful listing is kept.
 
